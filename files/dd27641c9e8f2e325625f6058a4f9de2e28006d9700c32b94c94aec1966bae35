@@ -1,0 +1,1019 @@
+'use strict';
+
+// 치이카와 심즈 — 마을 시뮬레이션 (화면을 모른다)
+// 욕구가 줄고 → 모든 오브젝트 상호작용에 "지금 모자란 욕구" 기준 점수를 매겨 고르고 → 빈 자리(소켓)로 걸어가
+// → 정해진 시간 동안 쓰면서 욕구가 찬다. 심즈의 광고(advertisement) 방식. 시간 단위는 게임 분.
+(function (root) {
+  const { LIST, BY_ID, CHAT, NEEDS } = root.VillageObjects;
+  const NEED_KEYS = NEEDS.map(n => n[0]);
+  const WALK = 4.2;               // 게임 1분에 걷는 거리 (배속 1이면 실제 1초). 마을이 넓어 심즈보다 조금 빠르게
+  const DAY_START = 6 * 60;       // 06:00
+  // 욕구가 게임 1시간에 줄어드는 양
+  const DECAY = { hunger: 5, energy: 4, fun: 4.5, social: 3, hygiene: 2.2 };
+
+  // 출연진: 원작 주요 8명. 성향 0~1 (대담·다정·식탐·성실). 모델은 character.js 프리셋
+  const CAST = [
+    { id: 'chiikawa', name: '치이카와', traits: { brave: 0.25, social: 0.55, appetite: 0.7, diligent: 0.65 } },
+    { id: 'hachiware', name: '하치와레', traits: { brave: 0.6, social: 0.82, appetite: 0.5, diligent: 0.7 } },
+    { id: 'usagi', name: '우사기', traits: { brave: 0.85, social: 0.5, appetite: 0.82, diligent: 0.3 } },
+    { id: 'momonga', name: '모몽가', traits: { brave: 0.5, social: 0.7, appetite: 0.68, diligent: 0.2 } },
+    { id: 'shisa', name: '시사', traits: { brave: 0.45, social: 0.75, appetite: 0.5, diligent: 0.85 } },
+    { id: 'rakko', name: '랏코', traits: { brave: 0.85, social: 0.35, appetite: 0.45, diligent: 0.8 } },
+    { id: 'kurimanju', name: '쿠리만쥬', traits: { brave: 0.4, social: 0.45, appetite: 0.75, diligent: 0.35 } },
+    { id: 'furuhonya', name: '후루혼야', traits: { brave: 0.35, social: 0.4, appetite: 0.35, diligent: 0.55 } },
+  ];
+
+  /* ---------- 소켓: sockets.js(장소 GLB 기준) → 월드 좌표 ---------- */
+
+  const STALLS = { clothes: [-12, -8], books: [12, -8], takoyaki: [-12, 8], pottery: [12, 8] };
+  const ALIAS = { dock: 'pier', islandHomes: 'bungalow' };
+  function buildSockets(world) {
+    const out = {};
+    const raw = root.ASSET_SOCKETS || {};
+    for (const place of world.places) {
+      const data = raw[ALIAS[place.id] || place.id];
+      if (!data) continue;
+      const th = ((place.face || 0) * Math.PI) / 2;
+      const tf = (lx, lz) => [place.x + lx * Math.cos(th) + lz * Math.sin(th), place.z - lx * Math.sin(th) + lz * Math.cos(th)];
+      const add = (name, arr, f) => {
+        if (!Array.isArray(arr)) return;
+        const [x, z] = f(arr[0], arr[1]);
+        const s = { name, place: place.id, x, z, h: arr[2] || 0 };
+        if (arr[3] !== undefined) [s.fx, s.fz] = f(arr[3], arr[4]);
+        (out[place.id] || (out[place.id] = {}))[name] = s;
+      };
+      for (const [name, v] of Object.entries(data)) {
+        if (Array.isArray(v)) add(name, v, tf);
+        else if (place.id === 'market' && STALLS[name] && v && typeof v === 'object') {
+          // 시장 노점: 노점 자리·방향을 먼저 합성 (glb-world.js STALL_GLB와 같다)
+          const [ox, oz] = STALLS[name];
+          const st = Math.atan2(ox, oz);
+          const sf = (lx, lz) => [place.x + ox + lx * Math.cos(st) + lz * Math.sin(st), place.z + oz - lx * Math.sin(st) + lz * Math.cos(st)];
+          for (const [sub, arr] of Object.entries(v)) add(`${name}.${sub}`, arr, sf);
+        }
+      }
+    }
+    return out;
+  }
+
+  const clamp = (v, a = 0, b = 100) => Math.max(a, Math.min(b, v));
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+  // 모자랄수록 크게: 심즈의 욕구 곡선 (0이면 4.1배, 50이면 1.1배, 100이면 0.1배)
+  const weight = v => Math.pow(1 - clamp(v) / 100, 2) * 4 + 0.1;
+
+  class Village {
+    constructor(world, opts = {}) {
+      this.world = world;
+      this.nav = opts.nav || null;
+      this.sockets = buildSockets(world);
+      this.report = { unreachable: [], dropped: [], height: [] };
+      if (this.nav) this.prepareSockets();
+      this.places = Object.fromEntries(world.places.map(p => [p.id, p]));
+      this.minutes = DAY_START + 60;          // 07:00
+      this.day = 1;
+      this.speed = 1;
+      this.paused = false;
+      this.claims = new Map();                 // 'place/socket' → 캐릭터 id
+      this.log = [];
+      this.random = opts.random || Math.random;
+      // 이 월드에 실제로 있는 상호작용만 쓴다 (장소·소켓이 있는 것)
+      this.interactions = LIST.filter(x => this.places[x.place] && x.steps.every(st => this.candidates(x.place, st.socket).length));
+      // 갈 수 없는 자리 때문에 빠진 상호작용 (접촉 규칙 R1: 갈 수 없는 자리는 쓰지 않는다)
+      this.report.dropped = LIST.filter(x => this.places[x.place] && !this.interactions.includes(x)).map(x => x.id);
+      this.chars = CAST.map((c, i) => {
+        const plaza = this.places.plaza || world.places[0];
+        const a = (i / CAST.length) * Math.PI * 2;
+        const start = this.snap({ x: plaza.x + Math.cos(a) * 8, z: plaza.z + Math.sin(a) * 8 });
+        return {
+          ...c, x: start.x, z: start.z, angle: a + Math.PI, h: 0, ox: 0, oz: 0,
+          needs: { hunger: 55 + this.random() * 30, energy: 70 + this.random() * 25, fun: 50 + this.random() * 30, social: 45 + this.random() * 35, hygiene: 60 + this.random() * 30 },
+          money: 1500, act: null, clip: null, walking: false, hidden: false, doing: null, recent: [], orders: [], speech: null, speechLeft: 0, idleLeft: 0,
+        };
+      });
+      // 엑스트라: 주인공과 똑같은 욕구·점수·소켓·길 찾기로 스스로 사는 회색 주민. 플레이어가 조종할 수 없다 (opts.extras = 수)
+      // 마을 곳곳(상호작용이 있는 장소 둘레)에 흩어져 시작한다
+      const spots = world.places.filter(p => this.interactions.some(x => x.place === p.id));
+      for (let i = 0; i < (opts.extras || 0) && spots.length; i++) {
+        const p = spots[Math.floor(this.random() * spots.length)];
+        const a = this.random() * Math.PI * 2;
+        const r = (p.r || 8) * (0.6 + this.random() * 0.6);
+        const start = this.snap({ x: p.x + Math.cos(a) * r, z: p.z + Math.sin(a) * r });
+        const t = () => 0.2 + this.random() * 0.6;
+        this.chars.push({
+          id: `extra${i + 1}`, name: '엑스트라', extra: true, traits: { brave: t(), social: t(), appetite: t(), diligent: t() },
+          x: start.x, z: start.z, angle: a, h: 0, ox: 0, oz: 0,
+          needs: { hunger: 40 + this.random() * 50, energy: 50 + this.random() * 45, fun: 35 + this.random() * 55, social: 35 + this.random() * 55, hygiene: 45 + this.random() * 50 },
+          money: 800 + Math.floor(this.random() * 1200), act: null, clip: null, walking: false, hidden: false, doing: null, recent: [], orders: [], speech: null, speechLeft: 0, idleLeft: this.random() * 4,
+        });
+      }
+    }
+
+    // 소켓마다 접근할 칸(심즈 방식)과 실제 면 높이(R3)를 정한다
+    prepareSockets() {
+      for (const [place, list] of Object.entries(this.sockets)) {
+        for (const sk of Object.values(list)) {
+          const ap = this.nav.approach(sk);
+          sk.hData = sk.h;
+          if (!ap) {
+            sk.reach = false;
+            this.report.unreachable.push(`${place}/${sk.name}`);
+            continue;
+          }
+          sk.reach = true;
+          sk.ax = ap.x;
+          sk.az = ap.z;
+          sk.seatIn = ap.seatIn;
+          // 서는 자리는 밟는 면, 앉는 자리는 좌석 면. 데이터 높이와 0.04 넘게 다르면 남긴다
+          sk.h = ap.seatIn ? this.nav.measure(sk.x, sk.z, sk.hData) : this.nav.surface(sk.x, sk.z);
+          if (Math.abs(sk.h - sk.hData) > 0.04) this.report.height.push({ socket: `${place}/${sk.name}`, data: sk.hData, measured: +sk.h.toFixed(3) });
+        }
+      }
+    }
+    // 막힌 칸 위의 점을 가장 가까운 갈 수 있는 칸으로 옮긴다
+    snap(p) {
+      if (!this.nav || !this.nav.isBlocked(p.x, p.z) && this.nav.reach && this.nav.reach[this.nav.cellOf(p.x, p.z)]) return p;
+      const c = this.nav.nearestFree(p.x, p.z, 30);
+      return c < 0 ? p : this.nav.center(c);
+    }
+
+    get hour() { return (this.minutes / 60) % 24; }
+    clock() {
+      const m = Math.floor(this.minutes) % (24 * 60);
+      return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    }
+    say(c, text, sec = 4) {
+      c.speech = text;
+      c.speechLeft = sec;
+    }
+    note(text) {
+      this.log.push({ at: this.clock(), day: this.day, text });
+      if (this.log.length > 200) this.log.shift();
+    }
+
+    /* ---------- 소켓 점유 ---------- */
+
+    candidates(place, pattern) {
+      const all = this.sockets[place] || {};
+      const out = [];
+      for (const p of pattern.split('|')) {
+        if (p.endsWith('*')) out.push(...Object.values(all).filter(s => s.name.startsWith(p.slice(0, -1))));
+        else if (all[p]) out.push(all[p]);
+      }
+      return this.nav ? out.filter(s => s.reach) : out;
+    }
+    freeSocket(c, place, pattern, shared) {
+      if (shared) {
+        const all = this.candidates(place, pattern);
+        return all.length ? all[0] : null;
+      }
+      const list = this.candidates(place, pattern).filter(s => {
+        const who = this.claims.get(`${place}/${s.name}`);
+        if (who && who !== c.id) return false;
+        // 이름이 달라도 거의 같은 자리를 남이 잡았거나, 누가 그 자리에 서 있으면 겹치므로 쓰지 않는다 (R2)
+        return !this.chars || !this.chars.some(o => o !== c && ((o.claimSpot && Math.hypot(o.claimSpot.x - s.x, o.claimSpot.z - s.z) < 0.7) || (!o.hidden && !o.walking && Math.hypot(o.x - s.x, o.z - s.z) < 0.7)));
+      });
+      if (!list.length) return null;
+      list.sort((a, b) => dist(c, a) - dist(c, b));
+      return list[0];
+    }
+    claim(c, s) {
+      this.release(c);
+      this.claims.set(`${s.place}/${s.name}`, c.id);
+      c.claim = `${s.place}/${s.name}`;
+      c.claimSpot = { x: s.x, z: s.z };
+    }
+    release(c) {
+      if (c.claim && this.claims.get(c.claim) === c.id) this.claims.delete(c.claim);
+      c.claim = null;
+      c.claimSpot = null;
+    }
+
+    /* ---------- 고르기: 오브젝트가 알리는 효과 × 지금 모자란 정도 ---------- */
+
+    open(x) {
+      const h = this.hour;
+      if (x.hours && (h < x.hours[0] || h >= x.hours[1])) return false;
+      return true;
+    }
+    scoreOf(c, x) {
+      const t = c.traits;
+      const night = this.hour >= 21 || this.hour < 6;
+      let s = 0;
+      for (const [k, v] of Object.entries(x.gain)) {
+        let w = weight(c.needs[k]);
+        if (k === 'hunger') w *= 0.6 + t.appetite * 0.8;
+        if (k === 'social') w *= 0.6 + t.social * 0.8;
+        s += v > 0 ? v * w : v * 0.15;       // 줄어드는 욕구는 작은 벌점
+      }
+      if (x.earn) s += (x.earn / 100) * (c.money < 1000 ? 6 : c.money < 3000 ? 2 : 0.5) * (0.5 + t.diligent);
+      if (x.cost) s -= x.cost / 400;
+      if (x.group) {
+        const others = this.chars.filter(o => o !== c && o.doing && o.doing.x.place === x.place).length;
+        if (others) s += 8 * weight(c.needs.social) * Math.min(2, others);
+      }
+      if (x.night) s *= night ? 6 : 0.05;
+      else if (night) s *= 0.25;
+      const n = c.recent.filter(id => id === x.id).length;
+      if (n) s *= Math.pow(0.45, n);          // 같은 걸 연달아 하지 않는다
+      const place = this.places[x.place];
+      // 멀수록 덜 끌린다 (걸어가는 시간도 게임 시간이다)
+      return s / (1 + dist(c, place) / 70);
+    }
+    options(c) {
+      const out = [];
+      for (const x of this.interactions) {
+        if (!this.open(x) || (x.cost && c.money < x.cost)) continue;
+        // 채워 주는 욕구가 이미 거의 가득이면 끌리지 않는다 (배부르면 먹지 않는다). 돈을 버는 일은 예외
+        const helps = Object.entries(x.gain).filter(([, v]) => v > 0);
+        if (!x.earn && helps.length && helps.every(([k]) => c.needs[k] >= 88)) continue;
+        if (!x.steps.every(st => this.freeSocket(c, x.place, st.socket, x.shared))) continue;
+        out.push({ x, score: this.scoreOf(c, x) });
+      }
+      // 수다: 친구가 고프면 가까운 캐릭터를 찾아간다
+      if (this.hour >= 7 && this.hour < 21) {
+        for (const o of this.chars) {
+          // 멈춰서 뭔가 하는 캐릭터에게만 간다 (걸어가는 상대를 쫓지 않는다)
+          if (o === c || o.hidden || (o.doing && (o.doing.kind === 'chat' || o.doing.phase === 'walk')) || (o.doing && o.doing.x.night)) continue;
+          // 상대가 내가 도착할 때까지 그 자리에 있을 때만 (가는 동안 떠나 버리면 수다가 깨진다)
+          const travel = dist(c, o) / WALK + 2;
+          if (dist(c, o) > 90 || (o.doing && o.doing.left < travel)) continue;
+          const s = (CHAT.gain.social * weight(c.needs.social) * (0.6 + c.traits.social * 0.8) + CHAT.gain.fun * weight(c.needs.fun)) / (1 + dist(c, o) / 70);
+          out.push({ x: CHAT, with: o, score: s * (c.recent.includes(`chat:${o.id}`) ? 0.4 : 1) });
+        }
+      }
+      return out.sort((a, b) => b.score - a.score);
+    }
+    choose(c) {
+      if (c.orders.length) {
+        const o = c.orders.shift();
+        return this.start(c, o.x, o.with, true);
+      }
+      const opts = this.options(c);
+      if (!opts.length || opts[0].score < 6) {
+        c.idleLeft = 3 + this.random() * 5;
+        return;
+      }
+      // 상위 3개 중 점수 비례로 (늘 최고만 고르면 로봇 같다)
+      const top = opts.slice(0, 3);
+      let r = this.random() * top.reduce((a, b) => a + b.score, 0);
+      let pick = top[0];
+      for (const o of top) {
+        r -= o.score;
+        if (r <= 0) {
+          pick = o;
+          break;
+        }
+      }
+      this.start(c, pick.x, pick.with, false);
+    }
+
+    /* ---------- 하기 ---------- */
+
+    start(c, x, other, ordered) {
+      if (x === CHAT) {
+        if (!other || other.hidden) return;
+        c.doing = { kind: 'chat', x, with: other, phase: 'walk', left: x.min };
+        this.say(c, ordered ? '응!' : `${other.name}!`, 2);
+        // 부르면 한가한 상대는 그 자리에서 기다린다
+        if (!other.doing) {
+          other.doing = { kind: 'chat', x, with: c, phase: 'wait', left: x.min, waitLeft: 40 };
+          other.idleLeft = 0;
+        }
+        return;
+      }
+      const total = x.steps.reduce((a, s) => a + s.min, 0);
+      c.doing = { kind: 'obj', x, step: -1, total, socket: null, left: 0, paid: false, ordered };
+      this.nextStep(c);
+    }
+    nextStep(c) {
+      const d = c.doing;
+      d.step += 1;
+      const st = d.x.steps[d.step];
+      if (!st) return this.finish(c);
+      const s = this.freeSocket(c, d.x.place, st.socket, d.x.shared);
+      if (!s) {
+        // 두 번째 단계부터는 자리가 날 때까지 지금 자리에서 잠깐 기다린다 (탕 안에서 수건 자리를 기다리는 식)
+        if (d.step > 0 && (d.queueLeft === undefined || d.queueLeft > 0)) {
+          d.step -= 1;
+          d.phase = 'queue';
+          if (d.queueLeft === undefined) d.queueLeft = 5;
+          return;
+        }
+        return this.abort(c, '자리가 없어요');
+      }
+      d.queueLeft = undefined;
+      if (d.x.shared) this.release(c);
+      else this.claim(c, s);
+      d.socket = s;
+      d.phase = 'walk';
+      d.left = st.min;
+      // 걸어갈 시간 여유: 길 지도로 돌아가는 길은 직선보다 길다. 배를 타면 더
+      d.walkLeft = 20 + dist(c, s) / WALK * 2.5;
+    }
+    // 자리(좌석·탕 안 같은 막힌 칸)에 있으면 빈칸으로 나오게 한다
+    // 자리에서 나올 때는 앉을 때의 반대로, 가장 가까운 빈칸까지 곧게 나온다 (심즈 방식 자리 접근의 반대)
+    leaveSeat(c) {
+      if (!this.nav || !this.nav.isBlocked(c.x, c.z)) return;
+      const n = this.nav.nearestFree(c.x, c.z, 2.5);
+      if (n < 0) return;
+      c.exit = this.nav.center(n);
+    }
+    abort(c, why) {
+      if (c.doing && c.doing.ordered) this.say(c, why, 3);
+      this.release(c);
+      this.clearRoute(c);
+      this.leaveSeat(c);
+      c.doing = null;
+      c.act = null;
+      c.clip = null;
+      c.prop = null;
+      c.hidden = false;
+      c.h = this.nav ? this.nav.surface(c.x, c.z) : 0;
+    }
+    finish(c) {
+      const d = c.doing;
+      if (d.x.earn) {
+        c.money += d.x.earn;
+        this.note(`${c.name}: ${d.x.name} 끝 (+${d.x.earn}원)`);
+      } else this.note(`${c.name}: ${d.x.name} 끝`);
+      c.recent.push(d.x.id);
+      if (c.recent.length > 4) c.recent.shift();
+      this.release(c);
+      this.clearRoute(c);
+      this.leaveSeat(c);
+      // 집 안에서 나올 때는 문 앞의 빈자리로 나온다 (같은 집에서 잔 캐릭터끼리 같은 점에 겹치지 않게, R2)
+      if (d.x.hide && this.nav) {
+        const busy = this.chars.some(o => o !== c && !o.hidden && Math.hypot(o.x + (o.ox || 0) - c.x, o.z + (o.oz || 0) - c.z) < 0.95);
+        const p = busy ? this.asideSpot(c) : null;
+        if (p) {
+          c.x = p.x;
+          c.z = p.z;
+        }
+      }
+      c.doing = null;
+      c.act = null;
+      c.clip = null;
+      c.prop = null;
+      c.hidden = false;
+      c.h = this.nav ? this.nav.surface(c.x, c.z) : 0;
+      c.idleLeft = 1 + this.random() * 2;
+    }
+
+    clearRoute(c) {
+      c.legs = null;
+      c.navKey = null;
+      c.navTarget = null;
+      c.navGoal = null;
+      c.seating = false;
+      c.detour = null;
+      if (c.riding) {
+        c.riding = false;
+        c.hidden = false;
+      }
+    }
+    // 걸어가기 (R1): 실제 지오메트리로 만든 길 지도 위의 길만 따라간다. 막힌 자리(의자 등)는 접근 칸까지 걸어가서
+    // 마지막에만 자리로 들어간다(심즈 방식). 배 포털은 타는 동안 숨는다. 실패하면 null
+    walk(c, target, dt) {
+      if (!this.nav) return this.walkStraight(c, target, dt);
+      let goal = target.ax !== undefined ? { x: target.ax, z: target.az } : target;
+      // 막힌 자리의 접근 칸은 앉아 있는 다른 캐릭터와 0.95 이상 떨어진 칸으로 고른다 (옆 자리 사람을 스치지 않게)
+      if (target.seatIn && c.navTarget === target && c.navGoal) goal = c.navGoal;
+      else if (target.seatIn) {
+        const seated = this.chars.filter(o => o !== c && !o.hidden && this.seated(o));
+        let best = null;
+        let bestD = Infinity;
+        const R = Math.ceil(2.5 / 0.5);
+        for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
+          const p = { x: target.x + dx * 0.5, z: target.z + dz * 0.5 };
+          const cell = this.nav.cellOf(p.x, p.z);
+          if (!this.nav.free(cell)) continue;
+          const q = this.nav.center(cell);
+          const dd = Math.hypot(q.x - target.x, q.z - target.z);
+          if (dd > 2.5 || dd >= bestD) continue;
+          if (seated.some(o => Math.hypot(o.x - q.x, o.z - q.z) < 0.95)) continue;
+          best = q;
+          bestD = dd;
+        }
+        if (best) goal = best;
+        c.navTarget = target;
+        c.navGoal = goal;
+      }
+      const key = `${goal.x.toFixed(2)},${goal.z.toFixed(2)}`;
+      if (c.navKey !== key) {
+        // 앉아서 뭔가 하는 캐릭터 옆은 비켜 가는 길로 (R2). 못 찾으면 그냥 길로
+        this.nav.setAvoid(this.chars.filter(o => o !== c && !o.hidden && this.seated(o)).map(o => ({ x: o.x, z: o.z })), c, goal);
+        c.legs = this.nav.route(c, goal);
+        this.nav.avoid = null;
+        if (!c.legs) c.legs = this.nav.route(c, goal);
+        c.navKey = key;
+        c.legI = 0;
+        c.ptI = 1;
+        c.seating = false;
+        if (!c.legs) {
+          c.navKey = null;
+          return null;
+        }
+        // 자리에서 막 일어나면 첫 칸까지는 자리에서 나오는 중이다
+        c.leaving = this.nav.isBlocked(c.x, c.z);
+      }
+      // 우회 중이면 우회로부터 (끝나면 지금 자리에서 길을 다시 찾는다)
+      if (c.detour && this.followDetour(c, dt)) return false;
+      let step = WALK * dt;
+      const before = { x: c.x, z: c.z, legI: c.legI, ptI: c.ptI, leaving: c.leaving };
+      while (step > 1e-6 && c.legI < c.legs.length) {
+        const leg = c.legs[c.legI];
+        if (leg.jump) {
+          // 배를 탄다: 출발 칸에서 숨고, 2분 뒤 도착 칸에 나타난다
+          if (!c.riding) {
+            c.riding = true;
+            c.rideLeft = 2;
+            c.hidden = true;
+            this.say(c, leg.jump.label || '배 타요', 2);
+          }
+          c.rideLeft -= dt;
+          if (c.rideLeft > 0) return false;
+          c.riding = false;
+          c.hidden = false;
+          c.x = leg.jump.to.x;
+          c.z = leg.jump.to.z;
+          c.legI += 1;
+          c.ptI = 1;
+          return false;
+        }
+        const p = leg.pts[c.ptI];
+        if (!p) {
+          c.legI += 1;
+          c.ptI = 1;
+          continue;
+        }
+        const dx = p.x - c.x;
+        const dz = p.z - c.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 1e-6) c.angle = Math.atan2(dx, dz);
+        if (d <= step) {
+          c.x = p.x;
+          c.z = p.z;
+          step -= d;
+          c.ptI += 1;
+          if (c.leaving && !this.nav.isBlocked(c.x, c.z)) c.leaving = false;
+        } else {
+          c.x += (dx / d) * step;
+          c.z += (dz / d) * step;
+          step = 0;
+          if (c.leaving && !this.nav.isBlocked(c.x, c.z)) c.leaving = false;
+        }
+      }
+      c.walking = true;
+      // 길을 양보한다 (R2): 이 걸음으로 누군가에게 0.9보다 가까워지면 걸음을 무르고 기다린다.
+      // 몇 틱 넘게 막히면 주변 캐릭터를 피하는 길로 다시 찾는다. 내 자리에 거의 다 왔으면(옆 자리와는 소켓 간격) 양보하지 않는다
+      const nearGoal = Math.hypot(target.x - c.x, target.z - c.z) < 1.2 || Math.hypot(goal.x - c.x, goal.z - c.z) < 0.3;
+      const close = p => this.chars.some(o => o !== c && !o.hidden && !o.riding && Math.hypot(o.x + (o.ox || 0) - p.x, o.z + (o.oz || 0) - p.z) < 0.92);
+      const closer = () => this.chars.some(o => {
+        if (o === c || o.hidden || o.riding) return false;
+        const ox = o.x + (o.ox || 0);
+        const oz = o.z + (o.oz || 0);
+        const now = Math.hypot(ox - c.x - (c.ox || 0), oz - c.z - (c.oz || 0));
+        return now < 0.92 && now < Math.hypot(ox - before.x - (c.ox || 0), oz - before.z - (c.oz || 0)) - 1e-6;
+      });
+      if (!nearGoal && !before.leaving && closer()) {
+        Object.assign(c, before);
+        // 막혀서 못 간 시간 (길을 다시 찾아도 이어서 센다. 앞으로 나아가면 0)
+        c.waitTicks = (c.waitTicks || 0) + 1;
+        // 기다리는 동안 가까워졌으면 그만큼 뒤로 물러선다 (빈칸일 때만)
+        for (const o of this.chars) {
+          if (o === c || o.hidden || o.riding) continue;
+          const vx = c.x + (c.ox || 0) - o.x - (o.ox || 0);
+          const vz = c.z + (c.oz || 0) - o.z - (o.oz || 0);
+          const dd = Math.hypot(vx, vz);
+          if (dd >= 0.93 || dd < 1e-4) continue;
+          const back = { x: c.x + (vx / dd) * (0.93 - dd), z: c.z + (vz / dd) * (0.93 - dd) };
+          if (!this.nav.isBlocked(back.x, back.z) && this.nav.clear(c, back)) {
+            c.x = back.x;
+            c.z = back.z;
+            c.navKey = null;
+          }
+        }
+        // 비켜 가기: 서로 막혀 못 가면 순위가 낮은 쪽이 상대가 지나갈 길에서 벗어난 빈자리로 비켜 섰다가, 상대가 지나간 뒤 다시 간다.
+        // 높은 쪽은 잠깐 기다린다(그래도 막히면 높은 쪽도 비켜 선다). 몸이 겹치는 걸음은 여전히 고르지 않는다 (통과 금지)
+        // 앞을 막은 게 그냥 서 있는(앉지 않은) 캐릭터면 그쪽이 옆으로 비켜 준다
+        if (c.waitTicks >= 3) {
+          for (const o of this.chars) {
+            if (o === c || o.hidden || o.walking || o.aside || this.seated(o)) continue;
+            if (Math.hypot(o.x + (o.ox || 0) - c.x - (c.ox || 0), o.z + (o.oz || 0) - c.z - (c.oz || 0)) > 1.2) continue;
+            if (o.doing && o.doing.kind === 'obj' && o.doing.phase === 'walk') continue;
+            o.aside = this.asideSpot(o);
+          }
+        }
+        const pocket = this.giveWay(c, c.waitTicks);
+        if (pocket) {
+          c.detour = pocket;
+          c.yieldTicks = 0;
+          return false;
+        }
+        c.yieldTicks = (c.yieldTicks || 0) + 1;
+        if (c.yieldTicks > 2) {
+          const others = this.chars.filter(o => o !== c && !o.hidden && Math.hypot(o.x - c.x, o.z - c.z) < 4).map(o => ({ x: o.x, z: o.z }));
+          this.nav.setAvoid(others, c, goal);
+          const legs = this.nav.route(c, goal);
+          this.nav.avoid = null;
+          if (legs) {
+            c.legs = legs;
+            c.legI = 0;
+            c.ptI = 1;
+          }
+          c.yieldTicks = 0;
+        }
+        c.h = this.nav.surface(c.x, c.z);
+        return false;
+      }
+      void close;
+      c.waitTicks = 0;
+      c.yieldTicks = 0;
+      c.h = this.nav.surface(c.x, c.z);
+      if (c.legI < c.legs.length) return false;
+      // 길 끝: 막힌 자리면 마지막만 자리로 들어간다 (높이도 좌석 면으로 옮겨 간다)
+      if (target.seatIn) {
+        const dx = target.x - c.x;
+        const dz = target.z - c.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 1e-3) {
+          if (!c.seating) {
+            c.seating = true;
+            c.seatFrom = { x: c.x, z: c.z, h: c.h, d };
+          }
+          const mv = Math.min(d, WALK * dt * 0.6);
+          c.x += (dx / d) * mv;
+          c.z += (dz / d) * mv;
+          c.angle = Math.atan2(dx, dz);
+          const u = 1 - Math.max(0, d - mv) / (c.seatFrom.d || 1);
+          c.h = c.seatFrom.h + ((target.h || 0) - c.seatFrom.h) * u;
+          if (d - mv > 1e-3) return false;
+        }
+      }
+      c.x = target.x;
+      c.z = target.z;
+      c.seating = false;
+      c.navKey = null;
+      c.navTarget = null;
+      c.navGoal = null;
+      c.legs = null;
+      c.walking = false;
+      return true;
+    }
+
+    // 길 지도가 없을 때만 쓰는 예전 직선 걷기
+    walkStraight(c, target, dt) {
+      const dx = target.x - c.x;
+      const dz = target.z - c.z;
+      const d = Math.hypot(dx, dz);
+      const step = WALK * dt;
+      if (d <= step) {
+        c.x = target.x;
+        c.z = target.z;
+        return true;
+      }
+      c.x += (dx / d) * step;
+      c.z += (dz / d) * step;
+      const place = target.place && this.places[target.place];
+      const near = place && Math.hypot(c.x - place.x, c.z - place.z) < (place.r || 10) + 6;
+      if (!near && this.world.collide) {
+        const before = { x: c.x, z: c.z };
+        this.world.collide(c, 0.7);
+        if (Math.hypot(c.x - before.x, c.z - before.z) > step * 0.6) {
+          // 벽에 막히면 옆으로 비켜 간다
+          c.x = before.x - (dz / d) * step * 0.8;
+          c.z = before.z + (dx / d) * step * 0.8;
+        }
+      }
+      c.angle = Math.atan2(dx, dz);
+      c.walking = true;
+      return false;
+    }
+
+    tickChar(c, dt) {
+      const night = this.hour >= 21 || this.hour < 6;
+      for (const k of NEED_KEYS) {
+        const sleeping = c.doing && c.doing.x.night && c.doing.phase === 'use';
+        if (k === 'energy' && sleeping) continue;
+        c.needs[k] = clamp(c.needs[k] - (DECAY[k] * (night && k !== 'energy' ? 0.4 : 1) * dt) / 60);
+      }
+      if (c.speechLeft > 0) {
+        c.speechLeft -= dt;
+        if (c.speechLeft <= 0) c.speech = null;
+      }
+      c.walking = false;
+      const d = c.doing;
+      // 서 있는 동안의 높이는 밟는 면 (가게 바닥판 등, R3). 자리를 쓰는 중이면 그 자리 높이
+      if (this.nav && !(d && d.kind === 'obj' && d.phase === 'use')) c.h = this.nav.surface(c.x, c.z);
+      // 자리에서 나오는 중이면 그것부터
+      if (c.exit) {
+        const dx = c.exit.x - c.x;
+        const dz = c.exit.z - c.z;
+        const dd = Math.hypot(dx, dz);
+        const mv = WALK * dt * 0.6;
+        c.leaving = true;
+        c.walking = true;
+        if (dd <= mv) {
+          c.x = c.exit.x;
+          c.z = c.exit.z;
+          c.exit = null;
+          c.leaving = false;
+          c.h = this.nav.surface(c.x, c.z);
+        } else {
+          c.x += (dx / dd) * mv;
+          c.z += (dz / dd) * mv;
+          c.angle = Math.atan2(dx, dz);
+          return;
+        }
+      }
+      // 겹쳐서 비켜 서는 중이면 그것부터 (하던 일은 그대로 이어진다)
+      if (c.aside && !(d && d.kind === 'obj' && d.phase === 'walk')) {
+        const r = this.walk(c, c.aside, dt);
+        if (r !== false) c.aside = null;
+        if (r === false) return;
+      } else if (c.aside) c.aside = null;
+      if (!d) {
+        if (c.idleLeft > 0) {
+          c.idleLeft -= dt;
+          c.act = 'idle';
+          return;
+        }
+        return this.choose(c);
+      }
+      if (d.kind === 'chat') return this.tickChat(c, d, dt);
+      if (d.phase === 'queue') {
+        d.queueLeft -= dt;
+        return this.nextStep(c);
+      }
+      const st = d.x.steps[d.step];
+      if (d.phase === 'walk') {
+        c.act = null;
+        c.prop = null;
+        c.h = 0;
+        c.hidden = false;
+        d.walkLeft -= dt;
+        if (d.walkLeft < 0) return this.abort(c, '못 가겠어요');
+        const arrived = this.walk(c, d.socket, dt);
+        if (arrived === null) return this.abort(c, '못 가겠어요');
+        if (!arrived) return;
+        // 도착: 자리에 맞춰 서고 그쪽을 본다
+        c.x = d.socket.x;
+        c.z = d.socket.z;
+        c.h = d.socket.h;
+        if (d.socket.fx !== undefined) c.angle = Math.atan2(d.socket.fx - c.x, d.socket.fz - c.z);
+        d.phase = 'use';
+        if (!d.paid && d.x.cost) {
+          c.money -= d.x.cost;
+          d.paid = true;
+        }
+        if (d.step === 0) this.say(c, d.x.name, 3);
+        // 집 안으로 들어가는 잠은 문 앞에 서 있지 않고 바로 들어간다 (여럿이 같은 문 앞에 겹치지 않게, R2)
+        c.hidden = !!d.x.hide;
+      }
+      // 쓰는 중: 단계 시간만큼 효과를 나눠서 채운다
+      c.act = st.act;
+      c.clip = st.clip || null;
+      // 손 소품은 그 단계가 필요로 할 때만, 쓰는 동안에만 (사물은 몸을 통과할 수 없다: 배치는 village-props.js)
+      c.prop = st.prop || null;
+      const share = dt / d.total;
+      for (const [k, v] of Object.entries(d.x.gain)) c.needs[k] = clamp(c.needs[k] + v * share);
+      if (d.x.group && this.chars.some(o => o !== c && o.doing && o.doing.x.place === d.x.place && o.doing.phase === 'use')) {
+        c.needs.social = clamp(c.needs.social + 0.4 * dt);
+      }
+      d.left -= dt;
+      if (d.left <= 0) this.nextStep(c);
+    }
+
+    // 수다 자리: 상대 둘레의 빈칸, 다른 캐릭터와 0.9 이상 떨어진 곳 중 나와 가장 가까운 곳
+    chatSpot(c, o) {
+      if (!this.nav) return { x: o.x + Math.sin(o.angle) * 1.8, z: o.z + Math.cos(o.angle) * 1.8 };
+      const base = Math.atan2(c.x - o.x, c.z - o.z);
+      let best = null;
+      let bestD = Infinity;
+      for (const r of [1.8, 1.6, 2.2]) {
+        for (let k = 0; k < 8; k++) {
+          const a = base + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * (Math.PI / 4);
+          const p = { x: o.x + Math.sin(a) * r, z: o.z + Math.cos(a) * r };
+          if (!this.nav.free(this.nav.cellOf(p.x, p.z))) continue;
+          // 상대와 나 사이에 벽이 없어야 한다 (상대가 앉은 자리 칸은 막혀 있으므로 그 앞까지만 본다)
+          const u = 1 - 0.9 / r;
+          if (!this.nav.clear(p, { x: p.x + (o.x - p.x) * u, z: p.z + (o.z - p.z) * u })) continue;
+          if (this.chars.some(q => q !== c && q !== o && !q.hidden && (Math.hypot(q.x - p.x, q.z - p.z) < 0.9 || (q.claimSpot && Math.hypot(q.claimSpot.x - p.x, q.claimSpot.z - p.z) < 0.9)))) continue;
+          const dd = Math.hypot(p.x - c.x, p.z - c.z);
+          if (dd < bestD) {
+            bestD = dd;
+            best = p;
+          }
+        }
+        if (best) return best;
+      }
+      return null;
+    }
+
+    tickChat(c, d, dt) {
+      const o = d.with;
+      if (!o || o.hidden) return this.abort(c, '');
+      if (d.phase === 'wait') {
+        // 부른 친구가 올 때까지 그쪽을 보며 기다린다
+        c.act = 'idle';
+        c.angle = Math.atan2(o.x - c.x, o.z - c.z);
+        d.waitLeft -= dt;
+        if (dist(c, o) < 2.4) d.phase = 'use';
+        else if (d.waitLeft <= 0 || !o.doing || o.doing.with !== c) {
+          c.doing = null;
+          c.act = null;
+        }
+        if (d.phase !== 'use') return;
+      }
+      if (d.phase === 'walk') {
+        c.act = null;
+        if (o.doing && o.doing.phase === 'walk') return this.abort(c, '');
+        // 상대 둘레 1.6~2.2의 빈칸에 선다. 가구 안이나 남 위가 되지 않게 (R2)
+        if (!d.spot || Math.hypot(d.spotOf.x - o.x, d.spotOf.z - o.z) > 0.5) {
+          d.spot = this.chatSpot(c, o);
+          d.spotOf = { x: o.x, z: o.z };
+          if (!d.spot) return this.abort(c, '');
+        }
+        if (Math.hypot(c.x - d.spot.x, c.z - d.spot.z) > 0.05) {
+          const r = this.walk(c, d.spot, dt);
+          d.walkTime = (d.walkTime || 0) + dt;
+          if (r === null || d.walkTime > 60) this.abort(c, '');
+          if (!r) return;
+        }
+        d.phase = 'use';
+        // 상대가 한가하면 같이 수다를 떤다 (상대도 수다 상태로)
+        if (!o.doing || (o.doing.kind === 'obj' && o.doing.x.group)) {
+          if (!o.doing) o.doing = { kind: 'chat', x: CHAT, with: c, phase: 'use', left: d.left };
+        }
+        this.say(c, ['있잖아…', '오늘 뭐 했어?', '헤헤', '배고프지 않아?'][Math.floor(this.random() * 4)], 3);
+        this.note(`${c.name}와(과) ${o.name}이(가) 수다를 떨어요`);
+      }
+      c.act = 'friend';
+      c.clip = null;
+      c.prop = null;
+      c.angle = Math.atan2(o.x - c.x, o.z - c.z);
+      c.needs.social = clamp(c.needs.social + (CHAT.gain.social / CHAT.min) * dt);
+      c.needs.fun = clamp(c.needs.fun + (CHAT.gain.fun / CHAT.min) * dt);
+      d.left -= dt;
+      if (d.left <= 0) {
+        c.recent.push(`chat:${o.id}`);
+        if (c.recent.length > 4) c.recent.shift();
+        c.doing = null;
+        c.act = null;
+        c.idleLeft = 1;
+      }
+    }
+
+    // dtReal: 실제 초. 배속만큼 게임 분이 흐른다 (1배 = 실제 1초에 게임 1분)
+    update(dtReal) {
+      if (this.paused) return;
+      let left = Math.min(0.25, dtReal) * this.speed;
+      while (left > 0) {
+        const dt = Math.min(0.25, left);
+        left -= dt;
+        const before = Math.floor(this.minutes / (24 * 60));
+        this.minutes += dt;
+        if (Math.floor(this.minutes / (24 * 60)) > before) this.day += 1;
+        for (const c of this.chars) this.tickChar(c, dt);
+        this.separate(dt);
+      }
+    }
+
+    // 걸을 수 있는 한 걸음인가: 막힌 칸·높이 다른 칸이 아니고 곧게 갈 수 있고, 누구에게도 몸 간격(0.92) 안으로 더 다가가지 않는다 (통과 금지)
+    stepOk(c, p) {
+      if (this.nav.isBlocked(p.x, p.z) || !this.nav.clear(c, p)) return false;
+      if (Math.abs(this.nav.surface(p.x, p.z) - this.nav.surface(c.x, c.z)) > 0.3) return false;
+      return this.chars.every(o => {
+        if (o === c || o.hidden || o.riding) return true;
+        const qx = o.x + (o.ox || 0);
+        const qz = o.z + (o.oz || 0);
+        const after = Math.hypot(qx - p.x - (c.ox || 0), qz - p.z - (c.oz || 0));
+        return after >= 0.92 || after >= Math.hypot(qx - c.x - (c.ox || 0), qz - c.z - (c.oz || 0)) - 1e-6;
+      });
+    }
+    // 우회로를 한 틱 걷는다. 걷는 중이면 true, 끝났거나 포기하면 false (그때 길을 다시 찾는다)
+    followDetour(c, dt) {
+      const det = c.detour;
+      const p = det.pts[det.i];
+      const dx = p.x - c.x;
+      const dz = p.z - c.z;
+      const d = Math.hypot(dx, dz);
+      const len = Math.min(d, WALK * dt, 0.6);
+      const q = d < 1e-4 ? p : { x: c.x + (dx / d) * len, z: c.z + (dz / d) * len };
+      if (d >= 1e-4 && !this.stepOk(c, q)) {
+        // 누가 앞을 막았다: 잠깐 기다리고, 오래 막히면 우회를 그만둔다
+        det.fails += 1;
+        c.walking = true;
+        if (det.fails > 6) {
+          c.detour = null;
+          c.navKey = null;
+          return false;
+        }
+        return true;
+      }
+      c.x = q.x;
+      c.z = q.z;
+      if (d >= 1e-4) c.angle = Math.atan2(dx, dz);
+      c.walking = true;
+      c.h = this.nav.surface(c.x, c.z);
+      if (Math.hypot(p.x - c.x, p.z - c.z) < 0.05) {
+        // 비켜 선 자리: 상대가 지나가 멀어질 때까지(또는 잠시) 서서 기다린다
+        if (det.hold && det.i === det.pts.length - 1) {
+          const b = det.hold;
+          det.holdLeft -= 1;
+          det.nearest = Math.min(det.nearest ?? Infinity, Math.hypot(b.x - c.x, b.z - c.z));
+          const passed = b.hidden || !b.walking || (det.nearest < 3 && Math.hypot(b.x - c.x, b.z - c.z) > det.nearest + 1.5);
+          if (!passed && det.holdLeft > 0) {
+            c.walking = false;
+            return true;
+          }
+        }
+        det.i += 1;
+        if (det.i >= det.pts.length) {
+          c.detour = null;
+          c.navKey = null;
+          return false;
+        }
+      }
+      return true;
+    }
+    // 비켜 설 빈자리 (좁은 길에서 순위가 낮은 쪽): 6 안의 빈칸 중 곧게 갈 수 있고, 상대가 앞으로 지나갈 길에서 1.2 넘게 떨어지고,
+    // 다른 캐릭터와 1.0 넘게 떨어진 가장 가까운 곳. 거기서 상대가 지나갈 때까지 기다린다 (followDetour의 hold)
+    giveWay(c, waited) {
+      if (!this.nav || waited < 3) return null;
+      let b = null;
+      let bd = 1.6;
+      for (const o of this.chars) {
+        if (o === c || o.hidden || o.riding) continue;
+        const od = Math.hypot(o.x + (o.ox || 0) - c.x - (c.ox || 0), o.z + (o.oz || 0) - c.z - (c.oz || 0));
+        if (od < bd) {
+          bd = od;
+          b = o;
+        }
+      }
+      if (!b || !b.walking || this.seated(b) || this.yields(c, b, waited)) return null;
+      // 상대가 앞으로 걸을 점들 (지금 다리부터 40개)
+      const route = [{ x: b.x, z: b.z }];
+      for (let li = b.legI || 0; b.legs && li < b.legs.length && route.length < 40; li++) {
+        const leg = b.legs[li];
+        if (!leg || leg.jump || !leg.pts) break;
+        for (let pi = li === b.legI ? b.ptI : 0; pi < leg.pts.length && route.length < 40; pi++) route.push(leg.pts[pi]);
+      }
+      const offRoute = p => route.every(q => Math.hypot(q.x - p.x, q.z - p.z) > 1.2);
+      let best = null;
+      let bestD = Infinity;
+      const h0 = this.nav.surface(c.x, c.z);
+      for (let dz = -12; dz <= 12; dz++) for (let dx = -12; dx <= 12; dx++) {
+        const dd = Math.hypot(dx, dz) * 0.5;
+        if (dd > 6 || dd < 0.5 || dd >= bestD) continue;
+        const cell = this.nav.cellOf(c.x + dx * 0.5, c.z + dz * 0.5);
+        if (cell < 0 || !this.nav.free(cell)) continue;
+        const p = this.nav.center(cell);
+        if (Math.abs(this.nav.surface(p.x, p.z) - h0) > 0.3 || !offRoute(p)) continue;
+        if (this.chars.some(o => o !== c && !o.hidden && Math.hypot(o.x - p.x, o.z - p.z) < 1.0)) continue;
+        if (!this.nav.clear(c, p)) continue;
+        best = p;
+        bestD = dd;
+      }
+      return best ? { pts: [best], i: 0, fails: 0, hold: b, holdLeft: 40 } : null;
+    }
+    // 마주친 상대가 걷는 중이고 내 순위가 높으면(id 순) 잠깐(게임 시간으로 몇 틱) 제자리에서 기다린다
+    yields(c, b, waited) {
+      return !!(b.walking && !this.seated(b) && !b.hidden && c.id < b.id && waited < 10);
+    }
+    // 앉아서 쓰는 중인가 (자리를 가진 캐릭터는 밀리지 않는다)
+    seated(c) {
+      return !!(c.seating || (c.doing && c.doing.kind === 'obj' && (c.doing.phase === 'use' || c.doing.phase === 'queue') && !c.doing.x.shared));
+    }
+    // 밀어내기 (R2, docs/handover-collision-avoidance.md sepPush): 표시 위치 오프셋(ox, oz)으로 서로 0.9 이상 떨어뜨린다.
+    // 앉은 캐릭터는 밀리지 않고, 밀린 자리가 막힌 칸이면 오프셋을 줄인다. 오프셋은 ±0.8 안에서 서서히 0으로 돌아간다
+    separate(dt = 0.25) {
+      const R = 0.9;
+      const live = this.chars.filter(c => !c.hidden);
+      for (const c of live) {
+        c.ox = (c.ox || 0) * 0.92;
+        c.oz = (c.oz || 0) * 0.92;
+      }
+      for (let pass = 0; pass < 3; pass++) {
+        for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {
+          const a = live[i];
+          const b = live[j];
+          const sa = this.seated(a);
+          const sb = this.seated(b);
+          if (sa && sb) continue;
+          let dx = b.x + b.ox - (a.x + a.ox);
+          let dz = b.z + b.oz - (a.z + a.oz);
+          let d = Math.hypot(dx, dz);
+          if (d >= R) continue;
+          if (d < 1e-4) {
+            const ang = ((i * 7 + j * 13) % 16) * (Math.PI / 8);
+            dx = Math.sin(ang);
+            dz = Math.cos(ang);
+            d = 1e-4;
+          }
+          const push = R + 0.01 - d;
+          const nx = dx / d;
+          const nz = dz / d;
+          const wa = sa ? 0 : sb ? 1 : 0.5;
+          const wb = sb ? 0 : sa ? 1 : 0.5;
+          a.ox -= nx * push * wa;
+          a.oz -= nz * push * wa;
+          b.ox += nx * push * wb;
+          b.oz += nz * push * wb;
+        }
+      }
+      for (const c of live) {
+        const len = Math.hypot(c.ox, c.oz);
+        void len;
+        if (len > 0.8) {
+          c.ox *= 0.8 / len;
+          c.oz *= 0.8 / len;
+        }
+        if (this.nav) {
+          // 밀린 자리가 막힌 칸이거나 높이가 다른 칸(단 위·아래)이면 오프셋을 줄인다
+          const bad = () => {
+            const here = this.nav.cellOf(c.x, c.z);
+            const there = this.nav.cellOf(c.x + c.ox, c.z + c.oz);
+            if (this.nav.isBlocked(c.x, c.z)) return false;
+            return there < 0 || this.nav.blocked[there] || Math.abs(this.nav.abs[there] - this.nav.abs[here]) > 0.1;
+          };
+          for (let k = 0; k < 4 && (c.ox || c.oz) && bad(); k++) {
+            c.ox *= 0.5;
+            c.oz *= 0.5;
+          }
+          if (bad()) c.ox = c.oz = 0;
+        }
+      }
+      if (!this.nav) return;
+      // 오프셋으로 못 떼어 놓은 겹침: 서 있는 캐릭터가 실제로 비켜 선다 (몇 틱 넘게 이어질 때)
+      for (const c of live) {
+        if (this.seated(c) || c.walking || c.aside || c.exit) {
+          c.stuck = 0;
+          continue;
+        }
+        const near = live.some(o => o !== c && Math.hypot(o.x + o.ox - c.x - c.ox, o.z + o.oz - c.z - c.oz) < R);
+        c.stuck = near ? (c.stuck || 0) + 1 : 0;
+        if (c.stuck >= 1) {
+          c.aside = this.asideSpot(c);
+          c.stuck = 0;
+          // 같은 틱 안에 바로 한 걸음 비킨다
+          if (c.aside) {
+            const r = this.walk(c, c.aside, dt);
+            if (r !== false) c.aside = null;
+          }
+        }
+      }
+      // 보이는 자리의 밟는 면 높이 (R3)
+      for (const c of live) if (!this.seated(c) && !c.seating && !c.exit) c.h = this.nav.surface(c.x + c.ox, c.z + c.oz);
+    }
+    // 비켜 설 자리: 1~2.5 안의 빈칸, 다른 캐릭터·남이 잡은 자리와 1.0 이상, 지금 자리에서 곧게 갈 수 있는 곳
+    asideSpot(c) {
+      let best = null;
+      let bestD = Infinity;
+      for (const r of [1, 1.5, 2, 2.5, 3, 4, 5]) {
+        for (let k = 0; k < 16; k++) {
+          const a = (k / 16) * Math.PI * 2;
+          const p = { x: c.x + Math.sin(a) * r, z: c.z + Math.cos(a) * r };
+          if (!this.nav.free(this.nav.cellOf(p.x, p.z))) continue;
+          // 지금 자리가 막힌 칸(자리에서 막 일어남)이면 곧은 길 대신 길찾기로 간다
+          if (!this.nav.isBlocked(c.x, c.z) && !this.nav.clear(c, p)) continue;
+          if (this.chars.some(o => o !== c && !o.hidden && (Math.hypot(o.x + (o.ox || 0) - p.x, o.z + (o.oz || 0) - p.z) < 1 || (o.claimSpot && Math.hypot(o.claimSpot.x - p.x, o.claimSpot.z - p.z) < 1)))) continue;
+          if (r < bestD) {
+            bestD = r;
+            best = p;
+          }
+        }
+        if (best) return best;
+      }
+      return null;
+    }
+
+    // 플레이어가 시킨다 (심즈처럼). 다음 판단 때 바로 한다
+    order(c, x, other) {
+      if (c.doing) this.abort(c, '');
+      c.orders = [{ x, with: other }];
+      c.idleLeft = 0;
+    }
+
+    save() {
+      return JSON.stringify({ v: 1, minutes: this.minutes, day: this.day, chars: this.chars.map(c => ({ id: c.id, x: c.x, z: c.z, needs: c.needs, money: c.money })) });
+    }
+    load(text) {
+      try {
+        const s = JSON.parse(text);
+        if (s.v !== 1) return false;
+        this.minutes = s.minutes;
+        this.day = s.day;
+        for (const r of s.chars) {
+          const c = this.chars.find(x => x.id === r.id);
+          if (c) Object.assign(c, { ...this.snap({ x: r.x, z: r.z }), needs: r.needs, money: r.money });
+        }
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+  }
+
+  root.Village = { Village, CAST, NEEDS, weight };
+}(typeof self !== 'undefined' ? self : this));

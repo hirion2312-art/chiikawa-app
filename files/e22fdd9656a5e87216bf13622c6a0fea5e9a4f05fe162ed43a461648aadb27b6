@@ -1,0 +1,1238 @@
+'use strict';
+
+// 게임과 편집기가 함께 쓰는 캐릭터 정의.
+// 길이 단위 1 = 머리 최대 반폭(기본 크기 기준), t = 머리 꼭대기에서 아래로의 거리
+const DEFAULT_CHARACTER = {
+  scale: 0.8, outline: 0.036,
+  headW: 0.98, headTop: 0.73, headLow: 0.9, depth: 0.88,
+  bodyW: 0.76, bodyH: 0.55, bodyT: 1.45, neckArc: 0.3,
+  footT: 2.15, footW: 0.055, footH: 0.1, footD: 0.06, footX: 0.215,
+  earSize: 0.115, earTall: 1.03, earX: 0.57, earT: 0.015,
+  armSize: 0.065, armLen: 0.12, armT: 1.33, armAngle: 1.18, armIn: -0.91, armDown: 0.75, armOut: 0.53,
+  armSink: 0.07, armLift: 0.75,
+  faceScale: 0.9, faceT: -0.03, expression: 'normal',
+  skinColor: '#fffdf8', inkColor: '#3a3227',
+  // 하치와레처럼 머리색, 고양이 귀, 꼬리가 있는 캐릭터용. hairColor가 없으면 쓰지 않는다
+  hairColor: null, hairCenterT: 0.21, hairSideT: 0.47,
+  catEarW: 0.26, catEarH: 0.38, catEarX: 0.54, catEarT: 0.12, catEarTilt: 0.22,
+  tailSize: 0.1, tailLen: 0.22, tailT: 1.74, tailAngle: 2.85,
+  // 우사기처럼 긴 귀가 있는 캐릭터용. rabbit이 true일 때만 쓴다
+  rabbit: false, rabEarW: 0.16, rabEarH: 0.86, rabEarGap: 0.24, rabEarT: 0.06, rabEarTilt: 0.06, rabEarInner: '#f6bcc8',
+  browInnerX: 0.24, browInnerT: 0.42, browPeakX: 0.62, browPeakT: 0.4, browOuterX: 0.68, browOuterT: 0.67, browWidth: 0.045,
+  puffSize: 0.1, puffT: 1.72,
+};
+
+const CHARACTERS = [
+  {
+    id: 'chiikawa',
+    label: '치이카와',
+    storageKey: 'fan-game-character-v2',
+    preset: {
+      ...DEFAULT_CHARACTER,
+      headTop: 0.77, bodyW: 0.74, neckArc: 0.5, footT: 2.11,
+      armSize: 0.06, armLen: 0.16, armT: 1.25, armAngle: 1.57, armIn: -1, armDown: 1, armOut: 1, armSink: 0.055, armLift: 0.72,
+    },
+  },
+  {
+    id: 'hachiware',
+    label: '하치와레',
+    storageKey: 'fan-game-hachiware-v1',
+    preset: { ...DEFAULT_CHARACTER, expression: 'h-normal', faceScale: 0.95, faceT: -0.05, hairColor: '#6fa8d6', neckArc: 0.2, catEarH: 0.34, bodyW: 0.74, footT: 2.08, armSink: 0.03 },
+  },
+  {
+    id: 'usagi',
+    label: '우사기',
+    storageKey: 'fan-game-usagi-v1',
+    preset: {
+      ...DEFAULT_CHARACTER,
+      expression: 'u-calm', faceScale: 0.95, faceT: -0.02, neckArc: 0.2, skinColor: '#fbeab8', rabbit: true,
+      headTop: 0.77, bodyW: 0.75, footT: 2.09, armAngle: 1.54,
+      browInnerX: 0.23, browInnerT: 0.33, browPeakX: 0.6, browPeakT: 0.28, browOuterX: 0.625, browOuterT: 0.655, browWidth: 0.032,
+    },
+  },
+];
+
+// 체격이 크게 다른 인물의 공통 값
+const ROUND_BODY = { ears: 'none', neckArc: 0.2 };
+const YOROI_BODY = {
+  ...DEFAULT_CHARACTER, ears: 'none', neckArc: 0, style: 'yoroi', scale: 0.95, expression: 'yo-normal', faceScale: 0.9, faceT: -0.2,
+  headW: 0.78, headTop: 0.8, headLow: 0.72, depth: 0.92,
+  bodyW: 1.08, bodyH: 1.1, bodyT: 2.2, footT: 4,
+  footW: 0.34, footH: 0.72, footD: 0.38, footX: 0.46,
+  armSize: 0.27, armLen: 1.2, armT: 1.75, armAngle: 1.57, armIn: -0.12, armDown: 1, armOut: 0.1, armSink: 0.1, armLift: 0.2,
+};
+const yoroiEntry = (id, label, skinColor, extra = {}) => ({
+  id, label, faceOwner: 'yoroi', storageKey: `fan-game-${id}-v1`,
+  preset: { ...YOROI_BODY, skinColor, ...extra },
+});
+const pajamaEntry = (id, label, skinColor, top) => ({
+  id, label, faceOwner: 'pajama', storageKey: `fan-game-${id}-v1`,
+  preset: { ...DEFAULT_CHARACTER, ...ROUND_BODY, style: 'pajama', expression: 'pj-normal', skinColor, faceOval: '#5f6b6e', pajamaTop: top, headTop: 0.77, bodyW: 0.74, footT: 2.09 },
+});
+
+CHARACTERS.push(
+  {
+    id: 'momonga', label: '모몽가', storageKey: 'fan-game-momonga-v1',
+    preset: { ...DEFAULT_CHARACTER, ...ROUND_BODY, style: 'momonga', expression: 'm-normal', faceScale: 0.95, faceT: -0.04, headTop: 0.77, bodyW: 0.72, footT: 2.08 },
+  },
+  {
+    id: 'shisa', label: '시사', storageKey: 'fan-game-shisa-v1',
+    preset: { ...DEFAULT_CHARACTER, ...ROUND_BODY, style: 'shisa', expression: 's-normal', faceScale: 0.95, faceT: -0.02, skinColor: '#fbf0d3', headTop: 0.77, bodyW: 0.75, footT: 2.09 },
+  },
+  {
+    id: 'furuhonya', label: '후루혼야', storageKey: 'fan-game-furuhonya-v1',
+    preset: { ...DEFAULT_CHARACTER, ...ROUND_BODY, style: 'furuhonya', expression: 'f-normal', faceScale: 0.95, faceT: -0.02, skinColor: '#fde6e1', hairColor: '#f5b3bb', hairLine: false, hairCenterT: 0.27, hairSideT: 0.48, headTop: 0.77, bodyW: 0.75, footT: 2.09 },
+  },
+  {
+    id: 'rakko', label: '랏코', storageKey: 'fan-game-rakko-v1',
+    preset: { ...DEFAULT_CHARACTER, ...ROUND_BODY, style: 'rakko', expression: 'r-normal', faceScale: 0.95, faceT: 0, skinColor: '#fbe8bf', limbColor: '#4a3230', outline: 0.022, headTop: 0.77, bodyW: 0.74, footT: 2.08 },
+  },
+  {
+    id: 'kurimanju', label: '쿠리만쥬', storageKey: 'fan-game-kurimanju-v1',
+    preset: { ...DEFAULT_CHARACTER, ...ROUND_BODY, style: 'kurimanju', expression: 'k-normal', faceScale: 0.95, faceT: 0, skinColor: '#fde9c4', hairColor: '#a37259', hairCenterT: 0.62, hairSideT: 0.3, hairPow: 1.6, hairSpan: 1.45, headTop: 0.77, bodyW: 0.78, footT: 2.1 },
+  },
+  {
+    id: 'goblin', label: '고블린', storageKey: 'fan-game-goblin-v1',
+    preset: { ...DEFAULT_CHARACTER, ...ROUND_BODY, style: 'goblin', expression: 'g-normal', faceScale: 0.95, faceT: 0, skinColor: '#cfe6ab', headTop: 0.77, bodyW: 0.74, footT: 2.08 },
+  },
+  {
+    id: 'anoko', label: '아노코', storageKey: 'fan-game-anoko-v1',
+    preset: { ...DEFAULT_CHARACTER, ...ROUND_BODY, style: 'anoko', expression: 'a-swirl', faceScale: 0.95, faceT: -0.02, headTop: 0.77, bodyW: 0.8, footT: 2.1 },
+  },
+  {
+    id: 'ode', label: '오데', storageKey: 'fan-game-ode-v1',
+    preset: {
+      ...DEFAULT_CHARACTER, ears: 'none', neckArc: 0, style: 'ode', scale: 0.85, expression: 'o-normal', faceScale: 1.15, faceT: 0, skinColor: '#f6f097',
+      headW: 1, headTop: 0.95, headLow: 0.9, depth: 0.92,
+      bodyW: 1.32, bodyH: 0.92, bodyT: 2.15, footT: 4.4,
+      footW: 0.36, footH: 0.7, footD: 0.42, footX: 0.62,
+      armSize: 0.34, armLen: 0.95, armT: 1.75, armAngle: 1.57, armIn: -0.7, armDown: 1, armOut: 0.45, armSink: 0.15, armLift: 0.25,
+    },
+  },
+  {
+    id: 'yamanba', label: '야만바', storageKey: 'fan-game-yamanba-v1',
+    preset: {
+      ...DEFAULT_CHARACTER, ears: 'none', neckArc: 0, style: 'yamanba', scale: 0.85, expression: 'y-laugh', faceScale: 1, faceT: -0.02,
+      skinColor: '#e8d6a6', bodyColor: '#8fa888', limbColor: '#8fa888',
+      hairColor: '#f7f5ef', hairCenterT: 0.26, hairSideT: 0.62,
+      headTop: 0.77, headLow: 0.82, bodyW: 0.86, bodyH: 0.7, bodyT: 2.25, footT: 3,
+      footW: 0.13, footH: 0.13, footD: 0.16, footX: 0.3,
+      armSize: 0.13, armLen: 0.5, armT: 1.75, armAngle: 1.57, armIn: -0.7, armDown: 1, armOut: 0.5, armSink: 0.06, armLift: 0.4,
+    },
+  },
+  yoroiEntry('yoroi-pochette', '포셰트 요로이', '#c5c3bd', { yoroiGear: 'pochette' }),
+  yoroiEntry('yoroi-labor', '노동 요로이', '#b5a99a', { yoroiGear: 'bell', expression: 'yo-shout' }),
+  yoroiEntry('yoroi-ramen', '라멘 로 요로이', '#dcc94a', { yoroiGear: 'towel', expression: 'yo-shout' }),
+  yoroiEntry('yoroi-grass', '풀뽑기 요로이', '#e8a58e', { yoroiGear: 'bandana', hairColor: '#f5e184', hairStripes: ['#a8dcc4', '#f5e184', '#f4b59c', '#a8dcc4', '#f5e184', '#f4b59c'], hairCenterT: 0.46, hairSideT: 0.46 }),
+  yoroiEntry('yoroi-tofu', '유두부 요로이', '#94b583', { yoroiGear: 'headband' }),
+  yoroiEntry('yoroi-pharmacy', '약국 요로이', '#a3bb8f', { yoroiGear: 'strap' }),
+  yoroiEntry('yoroi-takoyaki', '타코야키 요로이', '#c8675f'),
+  yoroiEntry('yoroi-dars', 'DARS 요로이', '#8f6248'),
+  yoroiEntry('yoroi-pudding', '푸딩 요로이', '#f3cf9e'),
+  yoroiEntry('yoroi-boss', '위대한 요로이', '#c9bd64', { yoroiGear: 'crown' }),
+  yoroiEntry('yoroi-kissa', '찻집 마스터', '#46403c'),
+  pajamaEntry('pajama-midori', '파자마 미도리', '#cfe3a1', 'spikes'),
+  pajamaEntry('pajama-pink', '파자마 핑크', '#f08e9b', 'ears'),
+  pajamaEntry('pajama-murasaki', '파자마 무라사키', '#d9cdec', 'ears'),
+  pajamaEntry('pajama-shiro', '파자마 시로', '#fbfaf5', 'tip'),
+);
+
+// 인물별 고유 부품. 좌표는 t(머리 꼭대기에서 아래로), 부품은 몸에 묻혀 밑선이 보이지 않는다
+const CHARACTER_PARTS = {
+  // 유저가 고른 귀와 꼬리. 색은 몸 색을 따른다
+  custom({ p, ball, cone, tick }) {
+    const inner = '#f6bcc8';
+    const back = -p.bodyW * p.depth;
+    const flat = mesh => { mesh.children[0].visible = false; return mesh; };
+    // 체형에 따라 머리 폭이 달라지므로 귀도 같이 옮긴다
+    const headRatio = p.headW / 0.98;
+    for (const sign of [-1, 1]) {
+      const side = sign * headRatio;
+      switch (p.earStyle) {
+        case 'small':
+          ball(side * 0.56, 0.05, 0, 0.085, 0.09, 0.065);
+          break;
+        case 'round':
+          ball(side * p.earX, p.earT, 0, p.earSize, p.earSize * p.earTall, p.earSize * 0.75);
+          break;
+        case 'bear':
+          ball(side * 0.6, 0.0, -0.02, 0.17, 0.175, 0.12);
+          flat(ball(side * 0.6, 0.01, 0.07, 0.09, 0.095, 0.07, inner));
+          break;
+        case 'mouse':
+          ball(side * 0.64, 0.0, -0.03, 0.28, 0.31, 0.15);
+          flat(ball(side * 0.64, 0.01, 0.09, 0.15, 0.18, 0.08, inner));
+          break;
+        case 'cat':
+          cone(side * 0.54, 0.14, 0, 0.22, 0.38, null, -side * 0.22);
+          flat(cone(side * 0.55, 0.09, 0.12, 0.09, 0.18, inner, -side * 0.22));
+          break;
+        case 'rabbit':
+          ball(side * 0.26, -0.36, -0.02, 0.15, 0.46, 0.09).rotation.z = -side * 0.08;
+          flat(ball(side * 0.26, -0.36, 0.05, 0.08, 0.33, 0.05, inner)).rotation.z = -side * 0.08;
+          break;
+        case 'tulip':
+          ball(side * 0.64, 0.04, -0.02, 0.26, 0.27, 0.12);
+          ball(side * 0.54, -0.18, -0.02, 0.075, 0.1, 0.075);
+          ball(side * 0.76, -0.18, -0.02, 0.075, 0.1, 0.075);
+          break;
+        case 'folded':
+          cone(side * 0.6, 0.22, -0.02, 0.17, 0.36, null, -side * 0.42);
+          tick(side * 0.6, 0.02, 0.14, 0.07, side * 0.9);
+          break;
+        case 'side':
+          cone(side * 0.72, 0.6, 0, 0.18, 0.44, null, -side * 1.1);
+          break;
+        default:
+          break;
+      }
+    }
+    // 꼬리는 작은 공을 이어 만든다. 겹친 안쪽 선은 가려지고 바깥 윤곽만 남는다
+    const chain = (count, at) => {
+      for (let i = 0; i < count; i++) {
+        const u = i / (count - 1);
+        const [x, t, z, r, color] = at(u);
+        ball(x, t, z, r, r, r, color);
+      }
+    };
+    switch (p.tailStyle) {
+      case 'puff':
+        ball(0, 1.78, back - 0.22, 0.17, 0.17, 0.16);
+        break;
+      case 'cat':
+        chain(14, u => [0.5 * u, 1.82 - 0.95 * u, back - 0.14 - 0.14 * Math.sin(u * 2.6), 0.085]);
+        break;
+      case 'curl':
+        chain(14, u => [0.13 * Math.sin(u * 7), 1.68 - 0.13 * (1 - Math.cos(u * 7)), back - 0.1 - 0.1 * u, 0.055]);
+        break;
+      case 'fluffy':
+        for (let i = 0; i < 9; i++) {
+          const u = i / 8;
+          const x = 0.35 + 0.7 * Math.sin(u * 2.7);
+          const t = 1.95 - 1.45 * u;
+          const r = 0.32 + 0.2 * Math.sin(u * Math.PI);
+          ball(x, t, back - 0.14 - 0.1 * Math.sin(u * 3), r, r, r * 0.8);
+          tick(x + r * 0.55, t, back - 0.14 + r * 0.72, 0.15, -0.9 - u);
+        }
+        break;
+      case 'fox':
+        chain(11, u => {
+          const r = 0.09 + 0.2 * Math.sin(Math.min(1, u * 1.15) * Math.PI);
+          return [0.72 * u, 1.82 - 0.86 * u * u, back - 0.14, Math.max(0.06, r), u > 0.74 ? '#fffdf8' : null];
+        });
+        break;
+      case 'dragon':
+        chain(24, u => [0.5 * u * u, 1.5 - 2 * u, back - 0.14 - 0.2 * Math.sin(u * 3), 0.26 * (1 - u) + 0.05]);
+        break;
+      default:
+        break;
+    }
+  },
+  momonga({ ball, tick }) {
+    const blue = '#bfe2f2';
+    for (const side of [-1, 1]) {
+      ball(side * 0.62, 0.02, -0.03, 0.28, 0.32, 0.16);
+      const inner = ball(side * 0.62, 0.02, 0.09, 0.14, 0.19, 0.09, blue);
+      inner.children[0].visible = false;
+      // 뺨의 털
+      ball(side * 0.86, 0.95, 0, 0.24, 0.22, 0.2);
+      for (const [t, a] of [[0.74, 1.3], [0.94, 1.57], [1.14, 1.85]]) {
+        tick(side * 1.08, t, 0.05, 0.14, -side * a);
+      }
+    }
+    // 크고 푹신한 파란 꼬리: 몸 옆으로 드러나고, 앞에서 보이는 면에 털 선이 있다
+    for (let i = 0; i < 9; i++) {
+      const u = i / 8;
+      const x = 0.35 + 0.7 * Math.sin(u * 2.7);
+      const t = 1.95 - 1.45 * u;
+      const r = 0.32 + 0.2 * Math.sin(u * Math.PI);
+      ball(x, t, -0.8 - 0.1 * Math.sin(u * 3), r, r, r * 0.8, blue);
+      tick(x + r * 0.55, t, -0.8 + r * 0.72, 0.15, -0.9 - u);
+    }
+  },
+  shisa({ ball, cone, tick }) {
+    const mane = '#f0a06f';
+    for (const side of [-1, 1]) {
+      // 작게 접힌 귀
+      cone(side * 0.6, 0.22, -0.02, 0.17, 0.36, null, -side * 0.42);
+      tick(side * 0.6, 0.02, 0.14, 0.07, side * 0.9);
+      // 옆으로 늘어선 갈기: 앞뒤로 어긋나게 겹쳐 잎 사이에 선이 보인다
+      [[0.36, 0.78, 0.1, 0.5], [0.76, 0.94, 0, 0.95], [1.14, 0.84, -0.1, 1.5]].forEach(([t, x, z, tilt]) => {
+        const lobe = ball(side * x, t, z, 0.19, 0.3, 0.1, mane);
+        lobe.rotation.z = -side * tilt;
+      });
+    }
+  },
+  furuhonya({ ball, tick }) {
+    const ear = '#f4aeb6';
+    for (const side of [-1, 1]) {
+      // 튤립 모양 귀: 윗부분이 세 갈래
+      ball(side * 0.66, 0.03, -0.02, 0.33, 0.34, 0.14, ear);
+      ball(side * 0.54, -0.24, -0.02, 0.09, 0.12, 0.09, ear);
+      ball(side * 0.8, -0.24, -0.02, 0.09, 0.12, 0.09, ear);
+    }
+    tick(-0.08, -0.04, 0.02, 0.1, 0.4);
+    tick(0.08, -0.04, 0.02, 0.1, -0.4);
+  },
+  rakko({ p, ball, ring, tick }) {
+    for (const side of [-1, 1]) ball(side * 0.97, 0.44, -0.08, 0.09, 0.12, 0.07, '#4a3230');
+    // 온몸의 삐죽한 털
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2;
+      if (Math.sin(a) < -0.35) continue;
+      const t = p.headTop - Math.sin(a) * p.headTop * 1.03;
+      const r = p.headW * 1.03 * Math.cos(a);
+      tick(r, t, 0, 0.09, -a + Math.PI / 2);
+    }
+    for (const side of [-1, 1]) {
+      for (const t of [1.6, 1.75, 1.9]) tick(side * 0.74 * Math.sqrt(Math.max(0, 1 - ((t - p.bodyT) / p.bodyH) ** 2)), t, 0, 0.08, side * 1.3);
+    }
+    // 목의 흰 수건과 등의 망토
+    ring(1.3, 0.8, 0.14, '#fbf7f0');
+    const cape = ball(0, 1.58, -0.58, 0.72, 0.42, 0.12, '#fbf7f0');
+    cape.rotation.x = 0.16;
+  },
+  kurimanju({ ball }) {
+    for (const side of [-1, 1]) ball(side * 0.88, 0.42, -0.02, 0.13, 0.11, 0.09);
+  },
+  goblin({ ball, cone }) {
+    for (const side of [-1, 1]) cone(side * 0.72, 0.6, 0, 0.18, 0.44, null, -side * 1.1);
+    cone(0, 0.1, 0, 0.22, 0.32);
+    // 허리에 두른 가죽, 아랫단은 지그재그
+    ball(0, 1.62, 0, 0.72, 0.27, 0.65, '#c9a783');
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      const zig = cone(Math.sin(a) * 0.62, 1.76, Math.cos(a) * 0.55, 0.09, 0.15, '#c9a783', 0, Math.PI);
+      zig.children[0].visible = false;
+    }
+  },
+  anoko({ ball, cone }) {
+    const shell = '#e8a184';
+    // 이마의 뿔, 둥근 귀, 볼의 털
+    cone(0, 0.26, 0.6, 0.075, 0.2, shell, 0, 0.6);
+    for (const side of [-1, 1]) {
+      ball(side * 0.68, 0.12, -0.05, 0.15, 0.15, 0.11);
+      ball(side * 0.96, 0.9, 0, 0.2, 0.2, 0.16);
+      ball(side * 0.9, 1.12, 0, 0.17, 0.15, 0.14);
+    }
+    // 줄무늬 조개 앞발
+    for (const [x, z] of [[-0.62, 0.62], [-0.77, 0.52], [-0.48, 0.68]]) {
+      ball(x, 1.8, z, 0.11, 0.09, 0.1, shell);
+    }
+    // 등에서 머리 위로 솟은 초록 용 꼬리
+    for (let i = 0; i < 24; i++) {
+      const u = i / 23;
+      const r = 0.28 * (1 - u) + 0.05;
+      ball(0.5 * u * u, 1.4 - 2.3 * u, -0.8 - 0.2 * Math.sin(u * 3), r, r, r, '#6e9470');
+    }
+  },
+  pajama({ p, ball, cone }) {
+    for (const side of [-1, 1]) {
+      if (p.pajamaTop === 'ears') ball(side * 0.56, 0.05, -0.02, 0.17, 0.15, 0.12);
+    }
+    if (p.pajamaTop === 'spikes') for (const x of [-0.3, 0, 0.3]) cone(x, 0.08 + Math.abs(x) * 0.25, 0, 0.13, 0.26, null, -x * 0.8);
+    if (p.pajamaTop === 'tip') cone(0, 0.06, 0, 0.16, 0.26, null);
+    // 잠옷 단추
+    for (const [t, z] of [[1.72, 0.57], [1.86, 0.43]]) {
+      const button = ball(0, t, z, 0.04, 0.04, 0.02, '#4a3230');
+      button.children[0].visible = false;
+    }
+  },
+  ode({ ball, cone }) {
+    // 어깨 근육과 허리에 두른 가죽, 굵은 다리
+    for (const side of [-1, 1]) ball(side * 1.05, 1.62, 0, 0.62, 0.5, 0.55);
+    ball(0, 2.8, 0, 1.12, 0.46, 0.92, '#c9a07e');
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const zig = cone(Math.sin(a) * 1, 3.12, Math.cos(a) * 0.82, 0.16, 0.28, '#c9a07e', 0, Math.PI);
+      zig.children[0].visible = false;
+    }
+  },
+  yamanba({ ball, cone, ring, tick }) {
+    // 뒤로 뻗친 흰 머리
+    ball(0, 0.62, -0.3, 1.12, 0.98, 0.72, '#f7f5ef');
+    for (const side of [-1, 1]) {
+      for (const [t, a] of [[0.34, 1.05], [0.68, 1.4], [1.02, 1.8]]) {
+        cone(side * 0.9, t, -0.25, 0.2, 0.44, '#f7f5ef', -side * a);
+      }
+    }
+    // 앞섶과 흰 허리띠
+    ring(2.4, 0.83, 0.06, '#fbf7f0');
+    ball(0.46, 2.4, 0.66, 0.09, 0.07, 0.05, '#fbf7f0');
+    tick(-0.12, 1.86, 0.72, 0.34, 0.5);
+    tick(0.12, 1.86, 0.72, 0.34, -0.5);
+  },
+  yoroi({ p, ball, cone, ring, tick, colored, model, y }) {
+    // 목 보호대, 어깨 갑옷, 허리띠, 가슴 근육 선
+    ball(0, 1.62, 0, 0.72, 0.28, 0.68);
+    for (const side of [-1, 1]) {
+      const pad = ball(side * 1, 1.66, 0, 0.44, 0.27, 0.44);
+      pad.rotation.z = -side * 0.35;
+      tick(side * 0.34, 2.12, 0.96, 0.4, side * 1.35);
+      tick(side * 0.72, 1.98, 0.8, 0.26, -side * 0.5);
+    }
+    tick(0, 2.5, 1.0, 0.4, 0);
+    ring(2.95, 0.82, 0.06, null);
+    const gear = p.yoroiGear;
+    if (gear === 'pochette') {
+      // 분홍 곰 포셰트와 비스듬한 끈
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.1, 0.03), colored(p.inkColor));
+      strap.position.set(0.12, y(2.2), 1.0);
+      strap.rotation.z = 0.68;
+      model.add(strap);
+      ball(0.85, 2.92, 0.72, 0.3, 0.27, 0.16, '#f6bcc8');
+      ball(0.65, 2.68, 0.72, 0.08, 0.08, 0.06, '#f6bcc8');
+      ball(1.05, 2.68, 0.72, 0.08, 0.08, 0.06, '#f6bcc8');
+    } else if (gear === 'towel') {
+      ball(0, 0.1, 0, 0.8, 0.42, 0.74, '#fbf9f4');
+      ball(0.1, 0.3, -0.62, 0.12, 0.08, 0.06, '#fbf9f4');
+      ball(-0.1, 0.3, -0.62, 0.12, 0.08, 0.06, '#fbf9f4');
+    } else if (gear === 'bandana') {
+      for (let i = 0; i < 18; i++) {
+        const a = (i / 18) * Math.PI * 2;
+        ball(Math.sin(a) * 0.64, 0.3, Math.cos(a) * 0.59, 0.05, 0.05, 0.05, '#fbf9f4');
+      }
+    } else if (gear === 'headband') {
+      ring(0.36, 0.66, 0.05, '#fbf9f4');
+      ball(0.44, 0.34, -0.46, 0.08, 0.14, 0.05, '#fbf9f4');
+    } else if (gear === 'strap') {
+      // 등에 엇갈린 끈
+      for (const dir of [-1, 1]) {
+        const band = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 0.04), colored('#f5f3ec'));
+        band.position.set(0, y(2.2), -0.97);
+        band.rotation.z = dir * 0.62;
+        model.add(band);
+      }
+    } else if (gear === 'crown') {
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        cone(Math.sin(a) * 0.36, 0.14, Math.cos(a) * 0.33, 0.12, 0.42, '#d9c75a');
+      }
+      ring(0.12, 0.42, 0.06, '#d9c75a');
+    } else if (gear === 'bell') {
+      // 노동의 종
+      cone(1.55, 2.75, 0.3, 0.2, 0.32, '#b98f68');
+      ball(1.55, 2.79, 0.3, 0.2, 0.05, 0.2, '#b98f68');
+    }
+  },
+};
+
+// 유저가 고른 생김새를 모델 값으로 바꾼다. 몸 비율은 세 가지 체형으로만 고른다
+function presetFromLook(look = {}) {
+  const base = { ...characterEntry('chiikawa').preset, ears: 'none', style: 'custom', neckArc: 0.2 };
+  // 얼굴 선과 윤곽선이 묻히지 않게 너무 어두운 색은 밝힌다
+  const hex = /^#[0-9a-f]{6}$/i.test(look.skin || '') ? look.skin : base.skinColor;
+  const c = new THREE.Color(hex);
+  const luma = 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
+  if (luma < 0.42) c.lerp(new THREE.Color(0xffffff), (0.42 - luma) / (1 - luma));
+  base.skinColor = `#${c.getHexString()}`;
+  // 샘플이 생기기 전에 태어난 아이의 값도 그대로 읽는다
+  base.earStyle = { normal: 'round', big: 'bear' }[look.ears] || look.ears || 'round';
+  base.tailStyle = look.tail || 'none';
+  base.eyeScale = look.eyeSize === undefined ? 1 : look.eyeSize;
+  base.eyeY = look.eyeY || 0;
+  base.eyeGap = look.eyeGap || 0;
+  base.browStyle = look.brow || 'scan';
+  base.browY = look.browY || 0;
+  base.browSize = look.browSize === undefined ? 1 : look.browSize;
+  base.mouthStyle = look.mouth || 'scan';
+  base.mouthY = look.mouthY || 0;
+  base.mouthSize = look.mouthSize === undefined ? 1 : look.mouthSize;
+  if (look.body === 'slim') {
+    base.headW *= 0.88;
+    base.bodyW *= 0.8;
+    base.footX *= 0.82;
+    base.footW *= 0.9;
+  } else if (look.body === 'round') {
+    base.headW *= 1.14;
+    base.bodyW *= 1.3;
+    base.bodyH *= 1.05;
+    base.footX *= 1.35;
+    base.footW *= 1.2;
+  }
+  return base;
+}
+
+const ACTIVE_CHARACTER_KEY = 'fan-game-active-character';
+
+function characterEntry(id) {
+  return CHARACTERS.find(c => c.id === id) || CHARACTERS[0];
+}
+
+function loadActiveCharacterId() {
+  try {
+    return characterEntry(localStorage.getItem(ACTIVE_CHARACTER_KEY)).id;
+  } catch (e) {
+    return CHARACTERS[0].id;
+  }
+}
+
+function saveActiveCharacterId(id) {
+  try {
+    localStorage.setItem(ACTIVE_CHARACTER_KEY, id);
+  } catch (e) {
+    // 저장이 막힌 환경에서는 이번 실행에서만 바뀐다
+  }
+}
+
+function loadCharacter(id) {
+  const entry = characterEntry(id);
+  let params;
+  try {
+    params = { ...entry.preset, ...JSON.parse(localStorage.getItem(entry.storageKey)) };
+  } catch (e) {
+    params = { ...entry.preset };
+  }
+  // 저장된 표정이 표정 목록 개편으로 없어졌으면 기본 표정으로 돌린다
+  if (!EXPRESSIONS.some(e => e.id === params.expression)) params.expression = entry.preset.expression;
+  return params;
+}
+
+function saveCharacter(id, params) {
+  localStorage.setItem(characterEntry(id).storageKey, JSON.stringify(params));
+}
+
+// 얼굴 그림의 범위. x는 중심에서의 호 길이, t는 머리 꼭대기에서의 거리
+const FACE_SPAN_X = 3;
+const FACE_SPAN_T = 1.5;
+
+// 등록된 표정. 스캔 이미지는 .claude/build-faces.html 로 만들어 face-scan-data.js 에 묶어 둔다
+const FACE_FRAME = FACE_SCAN_META.frame;
+const EXPRESSIONS = FACE_SCAN_META.faces.concat(
+  { id: 'pj-normal', owner: 'pajama', label: '기본', eyes: [], painted: true },
+  { id: 'pj-star', owner: 'pajama', label: '번쩍', eyes: [], painted: true, star: true },
+);
+
+function expressionsFor(characterId) {
+  const entry = characterEntry(characterId);
+  return EXPRESSIONS.filter(e => e.owner === (entry.faceOwner || entry.id));
+}
+
+const scanImages = {};
+const scanWaiters = [];
+for (const { id, painted } of EXPRESSIONS) {
+  if (painted) continue;
+  const image = new Image();
+  image.onload = () => {
+    scanImages[id] = image;
+    scanWaiters.splice(0).forEach(fn => fn());
+  };
+  image.src = FACE_SCAN_IMAGES[id];
+}
+
+// 머리 위를 덮는 색. 이마 가운데가 뾰족하게 갈라지고 옆으로 갈수록 내려온다.
+// 그림 양 끝의 색이 뒤통수까지 늘어나므로 뒤에서도 같은 높이로 이어진다
+function paintHair(g, p, pxX, pxY) {
+  const half = FACE_SPAN_X / 2 + 0.02;   // 그림 밖까지 칠해 끝줄이 비지 않게 한다
+  const span = p.hairSpan || 1.5;
+  const edge = x => p.hairCenterT
+    + (p.hairSideT - p.hairCenterT) * Math.pow(Math.sin((Math.min(1, Math.abs(x) / span) * Math.PI) / 2), p.hairPow || 0.6);
+  const trace = () => {
+    for (let x = -half; x <= half; x += 0.01) g.lineTo(x, edge(x));
+  };
+  g.save();
+  g.scale(pxX, pxY);
+  g.translate(FACE_SPAN_X / 2, 0);
+  g.lineJoin = 'round';
+  g.fillStyle = p.hairColor;
+  g.beginPath();
+  g.moveTo(-half, 0);
+  trace();
+  g.lineTo(half, 0);
+  g.closePath();
+  g.fill();
+  if (p.hairStripes) {
+    // 무지개 반다나: 물결치는 가로 띠
+    g.save();
+    g.clip();
+    p.hairStripes.forEach((color, i) => {
+      g.fillStyle = color;
+      g.beginPath();
+      g.moveTo(-half, 0.12 * i);
+      for (let x = -half; x <= half; x += 0.05) g.lineTo(x, 0.12 * i + 0.025 * Math.sin(x * 9 + i));
+      for (let x = half; x >= -half; x -= 0.05) g.lineTo(x, 0.12 * (i + 1) + 0.025 * Math.sin(x * 9 + i + 1));
+      g.closePath();
+      g.fill();
+    });
+    g.restore();
+  }
+  if (p.hairLine !== false) {
+    g.strokeStyle = p.inkColor;
+    g.lineWidth = (p.outline / p.scale) * 1.1;
+    g.beginPath();
+    trace();
+    g.stroke();
+  }
+  g.restore();
+}
+
+// 우사기 이마의 둥근 선 두 개: 눈 위에서 시작해 눈 바깥쪽으로 내려온다 (원작 정면 컷에서 잰 값)
+function paintBrowArcs(g, p, pxX, pxY) {
+  g.save();
+  g.scale(pxX, pxY);
+  g.translate(FACE_SPAN_X / 2, 0);
+  g.lineCap = 'round';
+  g.strokeStyle = p.inkColor;
+  g.lineWidth = p.browWidth;
+  for (const side of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(side * p.browInnerX, p.browInnerT);
+    g.quadraticCurveTo(side * p.browPeakX, p.browPeakT, side * p.browOuterX, p.browOuterT);
+    g.stroke();
+  }
+  g.restore();
+}
+
+// 파자마 파티즈: 얼굴이 그림자로 가려진 디자인이라 스캔할 이목구비가 없다. 어두운 타원과 볼의 빗금, 번쩍임만 그린다
+function paintFaceOval(g, p, expression, pxX, pxY) {
+  g.save();
+  g.scale(pxX, pxY);
+  g.translate(FACE_SPAN_X / 2, 0);
+  g.fillStyle = p.faceOval;
+  g.strokeStyle = p.inkColor;
+  g.lineWidth = 0.05;
+  g.beginPath();
+  g.ellipse(0, 0.74, 0.84, 0.5, 0, 0, Math.PI * 2);
+  g.fill();
+  g.stroke();
+  g.lineCap = 'round';
+  g.lineWidth = 0.026;
+  for (const side of [-1, 1]) {
+    for (const dx of [0, 0.09]) {
+      g.beginPath();
+      g.moveTo(side * 0.52 + dx, 0.74);
+      g.lineTo(side * 0.52 + dx - 0.05, 0.84);
+      g.stroke();
+    }
+  }
+  if (expression.star) {
+    g.fillStyle = '#fff';
+    g.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + Math.PI / 4;
+      const r = i % 2 ? 0.07 : 0.3;
+      g.lineTo(Math.cos(a) * r, 0.74 + Math.sin(a) * r);
+    }
+    g.closePath();
+    g.fill();
+  }
+  g.restore();
+}
+
+// 얼굴 부위 조정. 눈, 눈썹, 입을 스캔에서 따로 도려내 옮기거나 샘플 모양으로 바꾼다. 볼은 그대로 둔다
+const eyeSpots = expression => (expression.eyes.length ? expression.eyes : [{ x: -0.33, t: FACE_FRAME.eyeT, r: 0.14 }, { x: 0.33, t: FACE_FRAME.eyeT, r: 0.14 }]);
+// 표정마다 스캔의 입 자리 [가운데 t, 가로 반지름, 세로 반지름]. 표정 그림에서 잰 값
+const MOUTH_SPOTS = {
+  normal: [1.0, 0.17, 0.13], smile: [1.01, 0.2, 0.13], joy: [1.0, 0.22, 0.14], cry: [1.05, 0.2, 0.13], wail: [1.2, 0.26, 0.3], panic: [1.16, 0.2, 0.24],
+  nope: [1.16, 0.22, 0.21], worried: [1.0, 0.15, 0.12], brave: [1.04, 0.17, 0.16], flustered: [1.05, 0.15, 0.16], excited: [1.1, 0.2, 0.2], eating: [1.1, 0.27, 0.22],
+};
+// 입이 감정 그 자체인 표정은 샘플 입으로 바꾸지 않는다
+const CALM_MOUTH = new Set(['normal', 'smile', 'joy', 'worried', 'brave', 'flustered']);
+// 샘플 눈썹도 표정을 따라 기운다: 양수는 안쪽이 올라간 슬픈 눈썹, 음수는 치켜뜬 눈썹
+const BROW_TILT = { cry: 0.05, wail: 0.06, worried: 0.05, flustered: 0.03, panic: 0.05, brave: -0.05, nope: -0.04 };
+
+function paintBrow(g, style, cx, t, inward, size, tilt, ink) {
+  const w = 0.13 * size;
+  const innerX = cx + inward * w;
+  const outerX = cx - inward * w;
+  g.strokeStyle = ink;
+  g.lineCap = 'round';
+  g.lineWidth = (style === 'thick' ? 0.055 : 0.028) * Math.max(0.8, size);
+  const lift = { sad: 0.045, angry: -0.05 }[style] || 0;
+  const innerT = t - lift - tilt;
+  const outerT = t + lift + tilt;
+  g.beginPath();
+  g.moveTo(innerX, innerT);
+  if (style === 'arch') g.quadraticCurveTo(cx, t - 0.09 * size, outerX, outerT);
+  else g.lineTo(outerX, outerT);
+  g.stroke();
+}
+
+function paintMouth(g, style, cx, t, size, ink) {
+  const w = 0.075 * size;
+  g.strokeStyle = ink;
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  g.lineWidth = 0.026 * Math.max(0.8, size);
+  g.beginPath();
+  if (style === 'cat') {
+    g.arc(cx - w, t - 0.012, w, 0.15, Math.PI - 0.15);
+    g.moveTo(cx + w * 2 - 0.006, t);
+    g.arc(cx + w, t - 0.012, w, 0.15, Math.PI - 0.15);
+  } else if (style === 'small') {
+    g.moveTo(cx - w, t + w * 0.6);
+    g.lineTo(cx, t - w * 0.3);
+    g.lineTo(cx + w, t + w * 0.6);
+  } else if (style === 'smile') {
+    g.arc(cx, t - w * 1.1, w * 1.8, 0.45, Math.PI - 0.45);
+  } else if (style === 'line') {
+    g.moveTo(cx - w * 1.2, t);
+    g.lineTo(cx + w * 1.2, t);
+  } else if (style === 'round') {
+    g.ellipse(cx, t, w * 0.85, w, 0, 0, Math.PI * 2);
+    g.fillStyle = '#e88b96';
+    g.fill();
+  } else if (style === 'open') {
+    g.moveTo(cx - w * 1.3, t - w * 0.7);
+    g.quadraticCurveTo(cx, t - w * 0.4, cx + w * 1.3, t - w * 0.7);
+    g.quadraticCurveTo(cx + w, t + w * 1.5, cx, t + w * 1.5);
+    g.quadraticCurveTo(cx - w, t + w * 1.5, cx - w * 1.3, t - w * 0.7);
+    g.closePath();
+    g.fillStyle = '#e88b96';
+    g.fill();
+  }
+  g.stroke();
+}
+
+function adjustedScan(scan, expression, p) {
+  const eyeScale = p.eyeScale === undefined ? 1 : p.eyeScale;
+  const eyeShift = p.eyeY || 0;
+  const gap = p.eyeGap || 0;
+  const browStyle = p.browStyle || 'scan';
+  const browShift = p.browY || 0;
+  const browSize = p.browSize === undefined ? 1 : p.browSize;
+  const mouthStyle = CALM_MOUTH.has(expression.id) ? p.mouthStyle || 'scan' : 'scan';
+  const mouthShift = p.mouthY || 0;
+  const mouthSize = p.mouthSize === undefined ? 1 : p.mouthSize;
+  const eyesMoved = eyeScale !== 1 || eyeShift || gap;
+  const browsMoved = browStyle !== 'scan' || browShift || browSize !== 1 || eyeShift || gap;
+  const mouthMoved = mouthStyle !== 'scan' || mouthShift || mouthSize !== 1;
+  if (!eyesMoved && !browsMoved && !mouthMoved) return scan;
+
+  const px = FACE_FRAME.pxPerUnit;
+  const toX = x => (x + FACE_FRAME.halfX) * px;
+  const toY = t => (t - FACE_FRAME.topT) * px;
+  const out = document.createElement('canvas');
+  out.width = scan.width;
+  out.height = scan.height;
+  const g = out.getContext('2d');
+  g.drawImage(scan, 0, 0);
+  g.imageSmoothingQuality = 'high';
+
+  const spots = eyeSpots(expression);
+  // 눈 위쪽 띠가 눈썹이다
+  const browLimit = FACE_FRAME.eyeT - Math.max(...spots.map(e => e.r || 0.14)) - 0.03;
+  const cutPiece = (x0, t0, x1, t1, clip) => {
+    const piece = document.createElement('canvas');
+    piece.width = Math.max(1, Math.ceil((x1 - x0) * px));
+    piece.height = Math.max(1, Math.ceil((t1 - t0) * px));
+    const pg = piece.getContext('2d');
+    if (clip) {
+      clip(pg, piece.width, piece.height);
+      pg.clip();
+    }
+    pg.drawImage(scan, toX(x0), toY(t0), piece.width, piece.height, 0, 0, piece.width, piece.height);
+    return piece;
+  };
+  const erase = shape => {
+    g.globalCompositeOperation = 'destination-out';
+    g.beginPath();
+    shape();
+    g.fill();
+    g.globalCompositeOperation = 'source-over';
+  };
+  // 그려 넣을 조각을 모두 원본에서 먼저 잘라 둔 뒤, 지우고 다시 얹는다
+  const draws = [];
+
+  if (browsMoved) {
+    const bandTop = FACE_FRAME.topT;
+    if (browStyle === 'scan') {
+      for (const side of [-1, 1]) {
+        const x0 = side < 0 ? -FACE_FRAME.halfX : 0;
+        const x1 = side < 0 ? 0 : FACE_FRAME.halfX;
+        const piece = cutPiece(x0, bandTop, x1, browLimit);
+        const cx = side * 0.33;
+        const cy = (bandTop + browLimit) / 2 + 0.05;
+        draws.push(() => {
+          const scale = browSize;
+          const dx = toX(cx + side * gap) + (toX(x0) - toX(cx)) * scale;
+          const dy = toY(cy + eyeShift + browShift) + (toY(bandTop) - toY(cy)) * scale;
+          g.drawImage(piece, dx, dy, piece.width * scale, piece.height * scale);
+        });
+      }
+    } else if (browStyle !== 'none') {
+      draws.push(() => {
+        g.save();
+        g.scale(px, px);
+        g.translate(FACE_FRAME.halfX, -FACE_FRAME.topT);
+        for (const eye of spots) {
+          const side = Math.sign(eye.x);
+          const cx = eye.x + side * gap;
+          paintBrow(g, browStyle, cx, FACE_FRAME.eyeT - 0.27 + eyeShift + browShift, -side, browSize, BROW_TILT[expression.id] || 0, p.inkColor);
+        }
+        g.restore();
+      });
+    }
+    erase(() => g.rect(0, 0, out.width, toY(browLimit)));
+  }
+
+  if (eyesMoved) {
+    const patches = spots.map(eye => {
+      // 볼을 건드리지 않도록 눈에 딱 맞는 타원으로 도려낸다
+      const r = eye.r || 0.14;
+      const rx = Math.min(Math.abs(eye.x) - 0.02, r + 0.05);
+      const ry = eye.t - browLimit;
+      const piece = cutPiece(eye.x - rx, eye.t - ry, eye.x + rx, eye.t + ry, (pg, w, h) => pg.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2));
+      return { eye, rx, ry, piece };
+    });
+    for (const { eye, rx, ry } of patches) erase(() => g.ellipse(toX(eye.x), toY(eye.t), rx * px, ry * px, 0, 0, Math.PI * 2));
+    for (const { eye, rx, ry, piece } of patches) {
+      draws.push(() => {
+        const cx = toX(eye.x + Math.sign(eye.x) * gap);
+        const cy = toY(eye.t + eyeShift);
+        g.drawImage(piece, cx - rx * px * eyeScale, cy - ry * px * eyeScale, piece.width * eyeScale, piece.height * eyeScale);
+      });
+    }
+  }
+
+  if (mouthMoved) {
+    const [mt, rx, ry] = MOUTH_SPOTS[expression.id] || MOUTH_SPOTS.normal;
+    if (mouthStyle === 'scan') {
+      const piece = cutPiece(-rx, mt - ry, rx, Math.min(FACE_FRAME.bottomT, mt + ry), (pg, w, h) => pg.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2));
+      draws.push(() => {
+        const cx = toX(0);
+        const cy = toY(mt + mouthShift);
+        g.drawImage(piece, cx - rx * px * mouthSize, cy - ry * px * mouthSize, piece.width * mouthSize, piece.height * mouthSize);
+      });
+    } else {
+      draws.push(() => {
+        g.save();
+        g.scale(px, px);
+        g.translate(FACE_FRAME.halfX, -FACE_FRAME.topT);
+        paintMouth(g, mouthStyle, 0, 1.0 + mouthShift, mouthSize, p.inkColor);
+        g.restore();
+      });
+    }
+    erase(() => g.ellipse(toX(0), toY(mt), rx * px, ry * px, 0, 0, Math.PI * 2));
+  }
+
+  for (const draw of draws) draw();
+  return out;
+}
+
+// 스캔은 정면 그림이므로 머리 곡면에 감았을 때 정면에서 원본과 같아 보이도록 열 단위로 펴서 그린다
+function paintFace(canvas, p, expression, blink) {
+  const g = canvas.getContext('2d');
+  g.fillStyle = p.skinColor;
+  g.fillRect(0, 0, canvas.width, canvas.height);
+
+  const pxX = canvas.width / FACE_SPAN_X;
+  const pxY = canvas.height / FACE_SPAN_T;
+  // 이목구비 없는 얼굴 (심즈 엑스트라): 피부색만 칠한다
+  if (p.faceless) return true;
+  if (p.hairColor) paintHair(g, p, pxX, pxY);
+  if (p.rabbit) paintBrowArcs(g, p, pxX, pxY);
+  if (p.faceOval) {
+    paintFaceOval(g, p, expression, pxX, pxY);
+    return true;
+  }
+
+  if (!scanImages[expression.id]) return false;
+  const scan = adjustedScan(scanImages[expression.id], expression, p);
+
+  const px = FACE_FRAME.pxPerUnit;
+  const eyeT = FACE_FRAME.eyeT + p.faceT;
+  const toDestT = t => eyeT + (t - FACE_FRAME.eyeT) * p.faceScale;
+  const surface = 0.98 * p.headW;
+  const frameXAt = dx => {
+    const arc = (dx - canvas.width / 2) / pxX;
+    return (surface * Math.sin(Math.max(-1.5, Math.min(1.5, arc / 0.95)))) / p.faceScale;
+  };
+
+  const destY = toDestT(FACE_FRAME.topT) * pxY;
+  const destH = (FACE_FRAME.bottomT - FACE_FRAME.topT) * p.faceScale * pxY;
+  g.imageSmoothingQuality = 'high';
+  for (let dx = 0; dx < canvas.width; dx++) {
+    const from = frameXAt(dx);
+    const to = frameXAt(dx + 1);
+    if (from < -FACE_FRAME.halfX || to > FACE_FRAME.halfX) continue;
+    g.drawImage(scan, (from + FACE_FRAME.halfX) * px, 0, (to - from) * px, scan.height, dx, destY, 1, destH);
+  }
+
+  if (blink) {
+    // 눈 자리를 피부색으로 덮고 감은 눈을 그린다
+    g.save();
+    g.scale(pxX, pxY);
+    g.translate(FACE_SPAN_X / 2, 0);
+    g.lineCap = 'round';
+    for (const eye of expression.eyes) {
+      const eyeX = eye.x + Math.sign(eye.x) * (p.eyeGap || 0);
+      const arc = 0.95 * Math.asin(Math.max(-1, Math.min(1, (eyeX * p.faceScale) / surface)));
+      const t = toDestT(eye.t + (p.eyeY || 0));
+      const r = eye.r * 1.2 * p.faceScale * (p.eyeScale === undefined ? 1 : p.eyeScale);
+      g.fillStyle = p.skinColor;
+      g.beginPath();
+      g.ellipse(arc, t, r, r, 0, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = p.inkColor;
+      g.lineWidth = 0.034;
+      g.beginPath();
+      g.moveTo(arc - r * 0.75, t + 0.01);
+      g.quadraticCurveTo(arc, t - 0.055, arc + r * 0.75, t + 0.01);
+      g.stroke();
+    }
+    g.restore();
+  }
+  return true;
+}
+
+function makeFaceTexture(p, expression, blink, width) {
+  const c = document.createElement('canvas');
+  c.width = width;
+  c.height = width / 2;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  if (!paintFace(c, p, expression, blink)) {
+    // 이미지가 아직 안 읽혔으면 읽히는 대로 다시 그린다
+    const retry = () => {
+      if (paintFace(c, p, expression, blink)) tex.needsUpdate = true;
+      else scanWaiters.push(retry);
+    };
+    scanWaiters.push(retry);
+  }
+  return tex;
+}
+
+// 머리는 달걀형: 눈 위쪽(headTop)과 아래쪽(headLow)의 세로 반지름이 다르다
+function makeHeadGeometry(p) {
+  const points = [];
+  for (let i = 72; i >= 0; i--) {
+    const a = (i / 72) * Math.PI;
+    const ry = a < Math.PI / 2 ? p.headTop : p.headLow;
+    const t = p.headTop - ry * Math.cos(a);
+    points.push(new THREE.Vector2(Math.max(0, Math.sin(a) * p.headW), p.footT - t));
+  }
+  const segments = 96;
+  // 이음매가 등 뒤로 가도록 -π에서 시작한다
+  const geo = new THREE.LatheGeometry(points, segments, -Math.PI);
+
+  // 얼굴이 옆으로도 감겨 돌도록 원통 좌표로 UV를 잡는다
+  const pos = geo.attributes.position;
+  const uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    const phi = -Math.PI + (Math.floor(i / points.length) / segments) * Math.PI * 2;
+    const t = p.footT - pos.getY(i);
+    uv.setXY(i, 0.5 + (phi * 0.95) / FACE_SPAN_X, 1 - t / FACE_SPAN_T);
+  }
+  geo.scale(1, 1, p.depth);
+  return geo;
+}
+
+function ellipseRadius(t, centerT, ry, rx) {
+  const d = (t - centerT) / ry;
+  return Math.abs(d) < 1 ? rx * Math.sqrt(1 - d * d) : 0;
+}
+
+function buildCharacter(p, { faceWidth = 2048 } = {}) {
+  const inkMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: { color: { value: new THREE.Color(p.inkColor) }, thickness: { value: p.outline }, lift: { value: 0 } },
+    // 법선 방향으로 부풀린 뒷면으로 일정한 굵기의 외곽선을 그린다
+    vertexShader: `
+      uniform float thickness;
+      uniform float lift;
+      void main() {
+        vec3 n = normalize(normalMatrix * normal);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        mv.xyz += n * thickness;
+        mv.z += lift;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      uniform vec3 color;
+      void main() {
+        gl_FragColor = vec4(color, 1.0);
+        #include <colorspace_fragment>
+      }`,
+  });
+  const skinMat = new THREE.MeshBasicMaterial({ color: p.skinColor });
+  const lineMat = new THREE.MeshBasicMaterial({ color: p.inkColor });
+  const hairMat = new THREE.MeshBasicMaterial({ color: p.hairColor || p.skinColor });
+  const extraMats = [];
+  // 표정 텍스처는 처음 쓸 때 만들어 재사용한다
+  const faceTextures = {};
+  const facesFor = id => {
+    if (!faceTextures[id]) {
+      const expression = EXPRESSIONS.find(e => e.id === id) || EXPRESSIONS[0];
+      faceTextures[id] = {
+        open: makeFaceTexture(p, expression, false, faceWidth),
+        // 눈이 이미 감겨 있는 표정은 깜빡이지 않는다
+        blink: expression.eyes.length ? makeFaceTexture(p, expression, true, faceWidth) : null,
+      };
+    }
+    return faceTextures[id];
+  };
+  let expressionId = p.expression;
+  const faceMat = new THREE.MeshBasicMaterial({ map: facesFor(expressionId).open });
+
+  const limbMat = p.limbColor ? new THREE.MeshBasicMaterial({ color: p.limbColor }) : skinMat;
+  const bodyMat = p.bodyColor ? new THREE.MeshBasicMaterial({ color: p.bodyColor }) : skinMat;
+  if (p.limbColor) extraMats.push(limbMat);
+  if (p.bodyColor) extraMats.push(bodyMat);
+
+  const part = (geo, parent, pos, material = skinMat) => {
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.castShadow = true;
+    mesh.position.set(...pos);
+    mesh.add(new THREE.Mesh(geo, inkMat));
+    parent.add(mesh);
+    return mesh;
+  };
+
+  const root = new THREE.Group();     // 위치 + 바라보는 방향
+  const puppet = new THREE.Group();   // 통통 튀는 움직임
+  const model = new THREE.Group();
+  model.scale.setScalar(p.scale);
+  puppet.add(model);
+  root.add(puppet);
+
+  part(makeHeadGeometry(p), model, [0, 0, 0], faceMat);
+
+  const bodyGeo = new THREE.SphereGeometry(1, 40, 28);
+  bodyGeo.scale(p.bodyW, p.bodyH, p.bodyW * p.depth);
+  part(bodyGeo, model, [0, p.footT - p.bodyT, 0], bodyMat);
+
+  // 머리 윤곽선이 옆구리에서 안쪽으로 꺾여 들어오는 짧은 선. 위치는 머리와 몸이 만나는 곳을 찾아 정한다
+  const headRadius = t => ellipseRadius(t, p.headTop, p.headLow, p.headW);
+  const bodyRadius = t => ellipseRadius(t, p.bodyT, p.bodyH, p.bodyW);
+  let neckT = p.headTop;
+  for (let t = p.headTop; t < p.headTop + p.headLow; t += 0.005) {
+    if (bodyRadius(t) >= headRadius(t) && bodyRadius(t) > 0) {
+      neckT = t;
+      break;
+    }
+  }
+  if (p.neckArc > 0 && neckT > p.headTop) {
+    const neckGeo = new THREE.TorusGeometry(headRadius(neckT), (p.outline / p.scale) * 0.5, 8, 24, p.neckArc);
+    neckGeo.rotateZ(-p.neckArc / 2);
+    neckGeo.rotateX(Math.PI / 2);
+    neckGeo.scale(1, 1, p.depth);
+    for (const side of [0, Math.PI]) {
+      const neckLine = new THREE.Mesh(neckGeo, lineMat);
+      neckLine.position.y = p.footT - neckT;
+      neckLine.rotation.y = side;
+      model.add(neckLine);
+    }
+  }
+
+  // 귀: 밑부분이 머리에 묻혀 밑선 없이 이어진다
+  const earKind = p.ears || (p.hairColor ? 'cat' : p.rabbit ? 'rabbit' : 'round');
+  if (earKind === 'cat') {
+    // 고양이 귀: 끝이 살짝 둥근 삼각뿔. 밑동을 머리에 묻는다
+    const w = p.catEarW;
+    const h = p.catEarH;
+    const earCurve = new THREE.SplineCurve([
+      [0, -0.14], [w * 0.98, -0.14], [w, -0.02], [w * 0.68, h * 0.42], [w * 0.28, h * 0.84], [w * 0.1, h * 0.98], [0, h],
+    ].map(([x, y]) => new THREE.Vector2(x, y)));
+    const catEarGeo = new THREE.LatheGeometry(earCurve.getPoints(40).map(v => new THREE.Vector2(Math.max(0, v.x), v.y)), 28);
+    catEarGeo.scale(1, 1, 0.68);
+    for (const side of [-1, 1]) {
+      const ear = part(catEarGeo, model, [side * p.catEarX, p.footT - p.catEarT, 0], hairMat);
+      ear.rotation.z = -side * p.catEarTilt;
+    }
+  } else if (earKind === 'rabbit') {
+    // 토끼 귀: 머리 위쪽 가운데에서 나란히 솟은 긴 타원. 앞면에 분홍 안쪽을 덧붙인다
+    const earGeo = new THREE.SphereGeometry(1, 24, 18);
+    earGeo.scale(p.rabEarW, p.rabEarH / 2, p.rabEarW * 0.55);
+    const innerGeo = new THREE.SphereGeometry(1, 20, 14);
+    innerGeo.scale(p.rabEarW * 0.55, (p.rabEarH / 2) * 0.72, p.rabEarW * 0.42);
+    const innerMat = new THREE.MeshBasicMaterial({ color: p.rabEarInner });
+    extraMats.push(innerMat);
+    for (const side of [-1, 1]) {
+      const ear = part(earGeo, model, [side * p.rabEarGap, p.footT - p.rabEarT + p.rabEarH * 0.4, -0.02]);
+      ear.rotation.z = -side * p.rabEarTilt;
+      const inner = new THREE.Mesh(innerGeo, innerMat);
+      inner.position.set(0, p.rabEarH * 0.03, p.rabEarW * 0.2);
+      ear.add(inner);
+    }
+  } else if (earKind === 'round') {
+    const earGeo = new THREE.SphereGeometry(p.earSize, 20, 16);
+    earGeo.scale(1, p.earTall, 0.75);
+    part(earGeo, model, [-p.earX, p.footT - p.earT, 0]);
+    part(earGeo, model, [p.earX, p.footT - p.earT, 0]);
+  }
+
+  // 꼬리: 엉덩이 뒤쪽 표면에서 바깥 위로 뻗는다
+  // 몸에 붙어 있어도 윤곽선이 가려지지 않게 외곽선만 카메라 쪽으로 띄우고, 그 위에 본체를 다시 그린다
+  const liftOutline = mesh => {
+    const ink = inkMat.clone();
+    ink.uniforms.lift.value = 0.2;
+    ink.uniforms.thickness.value = p.outline * 0.7;
+    ink.depthWrite = false;
+    extraMats.push(ink);
+    mesh.children[0].material = ink;
+    mesh.children[0].renderOrder = 1;
+    mesh.renderOrder = 2;
+  };
+
+  let tail = null;
+  if (earKind === 'cat') {
+    const ring = bodyRadius(p.tailT);
+    const angle = p.tailAngle;
+    tail = new THREE.Group();
+    tail.position.set(ring * Math.sin(angle) * 0.92, p.footT - p.tailT, ring * p.depth * Math.cos(angle) * 0.92);
+    // 몸에 수직으로 꽂히면 외곽선이 고리처럼 떠 보이므로 위쪽으로 세워 뒤로 살짝 뻗는다
+    const out = new THREE.Vector3(Math.sin(angle) * 0.55, 0.85, Math.cos(angle) * 0.55).normalize();
+    const aim = new THREE.Group();
+    aim.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), out);
+    const tailMesh = part(new THREE.CapsuleGeometry(p.tailSize, p.tailLen, 6, 12), aim, [0, p.tailLen / 2 + p.tailSize * 0.5, 0], hairMat);
+    liftOutline(tailMesh);
+    tail.add(aim);
+    model.add(tail);
+  }
+
+  // 우사기의 작고 둥근 꼬리
+  if (p.rabbit) {
+    const ring = bodyRadius(p.puffT);
+    const puff = part(new THREE.SphereGeometry(p.puffSize, 18, 14), model, [0, p.footT - p.puffT, -ring * p.depth - p.puffSize * 0.3]);
+    liftOutline(puff);
+  }
+
+  const footGeo = new THREE.SphereGeometry(1, 20, 14);
+  footGeo.scale(p.footW, p.footH, p.footD);
+  const footL = part(footGeo, model, [-p.footX, p.footH, 0.03], limbMat);
+  const footR = part(footGeo, model, [p.footX, p.footH, 0.03], limbMat);
+
+  // 팔: 뿌리는 몸통 속에 묻고 끝만 비스듬히 밖으로 나온다.
+  // 걸을 때는 어깨의 법선을 축으로만 돌려, 표면에서 뻗어 나오는 각도가 그대로 유지되게 한다
+  const armGeo = new THREE.CapsuleGeometry(p.armSize, p.armLen, 6, 12);
+  const armY = t => p.footT - t;
+  const shoulderT = Math.min(p.bodyT + p.bodyH * 0.85, Math.max(p.armT, neckT + 0.06, p.bodyT - p.bodyH * 0.85));
+  // 어깨 자리: 몸 둘레 각도(armAngle, 0 = 정면, π/2 = 옆)에서 표면 점·법선·팔 방향을 구한다.
+  // anchor(앞으로 옮길 각도)는 물건을 몸 앞에서 들 때 어깨를 몸 표면을 따라 앞으로 옮긴다 (anim-rig.js armFwd 채널)
+  const armFrame = (side, angle) => {
+    const ring = bodyRadius(shoulderT);
+    const surface = new THREE.Vector3(side * ring * Math.sin(angle), armY(shoulderT), ring * p.depth * Math.cos(angle));
+    const c = p.bodyW * p.depth;
+    const normal = new THREE.Vector3(surface.x / (p.bodyW * p.bodyW), (surface.y - armY(p.bodyT)) / (p.bodyH * p.bodyH), surface.z / (c * c)).normalize();
+    const wanted = new THREE.Vector3(side * -p.armIn, -p.armDown, p.armOut);
+    const tangent = wanted.addScaledVector(normal, -wanted.dot(normal));
+    if (tangent.lengthSq() < 1e-6) tangent.set(0, -1, 0).addScaledVector(normal, normal.y);
+    tangent.normalize();
+    const reach = tangent.multiplyScalar(Math.cos(p.armLift)).addScaledVector(normal, Math.sin(p.armLift));
+    return { surface, normal, reach };
+  };
+  const makeArm = side => {
+    const ring = bodyRadius(shoulderT);
+    const surface = new THREE.Vector3(
+      side * ring * Math.sin(p.armAngle),
+      armY(shoulderT),
+      ring * p.depth * Math.cos(p.armAngle),
+    );
+    const c = p.bodyW * p.depth;
+    const normal = new THREE.Vector3(
+      surface.x / (p.bodyW * p.bodyW),
+      (surface.y - armY(p.bodyT)) / (p.bodyH * p.bodyH),
+      surface.z / (c * c),
+    ).normalize();
+
+    const wanted = new THREE.Vector3(side * -p.armIn, -p.armDown, p.armOut);
+    const tangent = wanted.addScaledVector(normal, -wanted.dot(normal));
+    if (tangent.lengthSq() < 1e-6) tangent.set(0, -1, 0).addScaledVector(normal, normal.y);
+    tangent.normalize();
+    const reach = tangent.multiplyScalar(Math.cos(p.armLift)).addScaledVector(normal, Math.sin(p.armLift));
+
+    // 관절은 표면보다 armSink만큼 안쪽 (회전축이 표면 위로 나오지 않게 몸 쪽으로 넣는다)
+    const joint = new THREE.Group();
+    joint.position.copy(surface).addScaledVector(normal, -p.armSink);
+    const aim = new THREE.Group();
+    aim.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), reach);
+    part(armGeo, aim, [0, -(p.armLen / 2), 0], limbMat);
+    joint.add(aim);
+    model.add(joint);
+    // aim은 anims.js의 팔 뻗기 채널(armExt)이 쓴다.
+    // anchor(fwd): 어깨를 fwd(라디안)만큼 몸 앞쪽으로 옮긴다. 0이면 원래 자리. normal은 그 자리에 맞게 바뀐다
+    let lastFwd = 0;
+    const arm = { joint, normal, aim, anchor(fwd = 0) {
+      if (Math.abs(fwd - lastFwd) < 1e-6) return;
+      lastFwd = fwd;
+      const f = armFrame(side, Math.max(0.15, p.armAngle - fwd));
+      joint.position.copy(f.surface).addScaledVector(f.normal, -p.armSink);
+      arm.normal.copy(f.normal);
+      aim.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), f.reach);
+    } };
+    return arm;
+  };
+  const armL = makeArm(-1);
+  const armR = makeArm(1);
+
+  // 인물별 고유 부품 (CHARACTER_PARTS)
+  if (p.style && CHARACTER_PARTS[p.style]) {
+    const colored = color => {
+      const m = new THREE.MeshBasicMaterial({ color });
+      extraMats.push(m);
+      return m;
+    };
+    const y = t => p.footT - t;
+    const ball = (x, t, z, rx, ry, rz, color) => {
+      const geo = new THREE.SphereGeometry(1, 22, 16);
+      geo.scale(rx, ry, rz);
+      return part(geo, model, [x, y(t), z], color ? colored(color) : skinMat);
+    };
+    // 끝이 둥근 뿔: 밑동을 몸에 묻는다
+    const cone = (x, t, z, r, h, color, tiltZ = 0, tiltX = 0) => {
+      const curve = new THREE.SplineCurve([[0, 0], [r, 0], [r * 0.7, h * 0.45], [r * 0.25, h * 0.88], [0, h]].map(([a, b]) => new THREE.Vector2(a, b)));
+      const geo = new THREE.LatheGeometry(curve.getPoints(20).map(v => new THREE.Vector2(Math.max(0, v.x), v.y)), 18);
+      const mesh = part(geo, model, [x, y(t), z], color ? colored(color) : skinMat);
+      mesh.rotation.set(tiltX, 0, tiltZ);
+      return mesh;
+    };
+    // 윤곽선 색의 짧은 선 (털, 빗금)
+    const tick = (x, t, z, len, angleZ, angleX = 0) => {
+      const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(p.outline * 0.55, len, 4, 8), lineMat);
+      mesh.position.set(x, y(t), z);
+      mesh.rotation.set(angleX, 0, angleZ);
+      model.add(mesh);
+      return mesh;
+    };
+    const ring = (t, r, tube, color) => {
+      const geo = new THREE.TorusGeometry(r, tube, 12, 48);
+      geo.rotateX(Math.PI / 2);
+      geo.scale(1, 1, p.depth);
+      return part(geo, model, [0, y(t), 0], color ? colored(color) : skinMat);
+    };
+    CHARACTER_PARTS[p.style]({ p, model, colored, ball, cone, tick, ring, y });
+  }
+
+  // speed: 0~1 움직임 정도, phase: 걸음 위상, airborne: 점프 중 여부
+  function animate(time, { speed = 0, phase = 0, airborne = false } = {}) {
+    const swing = Math.sin(phase);
+    const breathe = Math.sin(time * 2.4) * (1 - speed);
+    const stretch = 1 + (1 - Math.abs(swing)) * 0.035 * speed + breathe * 0.012 + (airborne ? 0.06 : 0);
+
+    puppet.position.y = Math.abs(swing) * 0.1 * speed;
+    puppet.scale.set(1 / stretch, stretch, 1 / stretch);
+    puppet.rotation.z = swing * 0.05 * speed;
+
+    footL.position.z = 0.03 + swing * 0.2 * speed;
+    footR.position.z = 0.03 - swing * 0.2 * speed;
+    footL.position.y = p.footH + Math.max(0, -swing) * 0.08 * speed;
+    footR.position.y = p.footH + Math.max(0, swing) * 0.08 * speed;
+
+    armL.joint.quaternion.setFromAxisAngle(armL.normal, swing * 0.4 * speed);
+    armR.joint.quaternion.setFromAxisAngle(armR.normal, swing * 0.4 * speed);
+
+    if (tail) tail.rotation.z = Math.sin(time * 3.5) * (0.12 + 0.18 * speed);
+
+    // 가끔 깜빡이기
+    const faces = facesFor(expressionId);
+    faceMat.map = faces.blink && time % 3.6 > 3.45 ? faces.blink : faces.open;
+  }
+
+  function dispose() {
+    root.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    for (const m of [inkMat, skinMat, lineMat, hairMat, faceMat, ...extraMats]) m.dispose();
+    for (const { open, blink } of Object.values(faceTextures)) {
+      open.dispose();
+      if (blink) blink.dispose();
+    }
+  }
+
+  function setExpression(id) {
+    expressionId = id;
+  }
+
+  // feet·footH·tail은 anims.js의 발·꼬리 채널이, arms[].aim은 팔 뻗기 채널이 쓴다 (docs/phase3-design.md §7-5)
+  return { root, model, arms: [armL, armR], feet: [footL, footR], footH: p.footH, tail, animate, setExpression, getExpression: () => expressionId, dispose };
+}

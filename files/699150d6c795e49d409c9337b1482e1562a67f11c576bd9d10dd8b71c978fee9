@@ -1,0 +1,251 @@
+'use strict';
+
+// 소품-몸 통과 검증기 (DIRECTION 제작 규칙: 사물은 몸을 통과할 수 없다)
+// 소품이 쓰이는 모든 (캐릭터 × 동작)을 0.1초 간격으로 전 구간 재생하며 소품 표면과 몸(몸통·머리) 표면의 최소 간격을 잰다.
+//   solve()  : 캐릭터×소품마다 간격 GAP 이상을 만족하는, 손에 가장 가까운 배치를 찾는다 (못 찾으면 크기를 줄인다)
+//   verify() : 배치표로 전 구간을 다시 재서 표로 돌려준다
+// 손(팔)과 닿는 것은 '잡기'라서 몸에서 뺀다. 외곽선 껍질(BackSide)도 뺀다. 게임 화면(game.html)에서 돌린다
+(function (root) {
+  const { BUILD, HAND, FIT, attach, detach, outward, handFrame } = root.VillageProps;
+  const GAP = 0.04;            // 목표 간격 (규칙 권장 0.03 + 여유)
+  const STEP = 0.1;            // 샘플 간격(초)
+  const ACT_DUR = 6;           // 클립이 없는 수식 동작은 6초를 잰다
+  const CELL = 0.15;
+  const REACH = 0.3;           // 이보다 멀면 충분히 떨어진 것으로 본다
+  const HAND_TOUCH = 0.03;     // R5: 소품 표면과 손 표면 사이가 이 이하여야 쥔 것이다 (docs/contact-rules.md)
+
+  // 소품이 쓰이는 (소품, 동작) 조합: 상호작용 표에서 모은다
+  function combos() {
+    const out = new Map();
+    for (const x of root.VillageObjects.LIST) for (const s of x.steps) {
+      if (!s.prop) continue;
+      const key = `${s.prop}|${s.clip || s.act}`;
+      if (!out.has(key)) out.set(key, { prop: s.prop, act: s.act, clip: s.clip || null });
+    }
+    return [...out.values()];
+  }
+
+  function makeActor(id) {
+    const preset = { ...characterEntry(id).preset };
+    const built = buildCharacter(preset, { faceWidth: 64 });
+    const a = { id, built, preset, offset: 0, prop: null };
+    a.base = { position: built.model.position.clone(), rotation: built.model.rotation.clone(), scale: built.model.scale.clone() };
+    built.root.updateMatrixWorld(true);
+    a.dirs = [0, 1].map(h => outward(built, handFrame(built, h, preset).aim, h));
+    a.body = bodyIndex(a);
+    return a;
+  }
+
+  // 몸 삼각형을 모델 공간에 모은다 (몸통·머리 메시는 모델에 고정이라 자세가 바뀌어도 모델 공간에서는 그대로다)
+  function bodyIndex(a) {
+    const { built } = a;
+    built.model.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(built.model.matrixWorld).invert();
+    const skip = new Set();
+    for (const arm of built.arms) arm.joint.traverse(o => skip.add(o));
+    if (built.tail) built.tail.traverse(o => skip.add(o));
+    const tris = [];
+    built.model.traverse(o => {
+      if (!o.isMesh || skip.has(o) || (o.material && o.material.side === THREE.BackSide)) return;
+      const geo = o.geometry;
+      const pos = geo.attributes.position;
+      const m = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld);
+      const v = i => new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(m);
+      const n = geo.index ? geo.index.count : pos.count;
+      for (let i = 0; i < n; i += 3) {
+        const ia = geo.index ? geo.index.getX(i) : i;
+        const ib = geo.index ? geo.index.getX(i + 1) : i + 1;
+        const ic = geo.index ? geo.index.getX(i + 2) : i + 2;
+        const t = new THREE.Triangle(v(ia), v(ib), v(ic));
+        if (t.getArea() < 1e-8) continue;
+        tris.push({ t, n: t.getNormal(new THREE.Vector3()) });
+      }
+    });
+    // 격자: 삼각형 경계 상자가 닿는 칸마다 등록
+    const grid = new Map();
+    const key = (x, y, z) => `${x},${y},${z}`;
+    tris.forEach((tr, i) => {
+      const box = new THREE.Box3().setFromPoints([tr.t.a, tr.t.b, tr.t.c]);
+      for (let x = Math.floor(box.min.x / CELL); x <= Math.floor(box.max.x / CELL); x++)
+        for (let y = Math.floor(box.min.y / CELL); y <= Math.floor(box.max.y / CELL); y++)
+          for (let z = Math.floor(box.min.z / CELL); z <= Math.floor(box.max.z / CELL); z++) {
+            const k = key(x, y, z);
+            if (!grid.has(k)) grid.set(k, []);
+            grid.get(k).push(i);
+          }
+    });
+    return { tris, grid, key };
+  }
+
+  // 점 하나와 몸 사이의 간격 (몸 안이면 음수)
+  const q = new THREE.Vector3();
+  function pointGap(body, p) {
+    const r = Math.ceil(REACH / CELL);
+    const cx = Math.floor(p.x / CELL);
+    const cy = Math.floor(p.y / CELL);
+    const cz = Math.floor(p.z / CELL);
+    let best = REACH;
+    let sign = 1;
+    const seen = new Set();
+    for (let x = cx - r; x <= cx + r; x++) for (let y = cy - r; y <= cy + r; y++) for (let z = cz - r; z <= cz + r; z++) {
+      const list = body.grid.get(body.key(x, y, z));
+      if (!list) continue;
+      for (const i of list) {
+        if (seen.has(i)) continue;
+        seen.add(i);
+        const tr = body.tris[i];
+        tr.t.closestPointToPoint(p, q);
+        const d = p.distanceTo(q);
+        if (d < best) {
+          best = d;
+          sign = q.sub(p).dot(tr.n) > 0 ? -1 : 1;   // 가장 가까운 면의 안쪽이면 몸 안
+        }
+      }
+    }
+    return best * sign;
+  }
+
+  // 소품 표면 점 (모델 공간). 정점을 고르게 추린다
+  function propPoints(a, g) {
+    a.built.model.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(a.built.model.matrixWorld).invert();
+    const pts = [];
+    g.traverse(o => {
+      if (!o.isMesh) return;
+      const pos = o.geometry.attributes.position;
+      const m = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld);
+      const step = Math.max(1, Math.floor(pos.count / 24));
+      for (let i = 0; i < pos.count; i += step) pts.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(m));
+    });
+    return pts;
+  }
+
+  // R5: 소품 표면과 손(팔 aim 아래 메시) 표면 사이의 최소 거리. 소품은 aim의 자식이라 자세와 무관하게 한 번 재면 된다
+  function handGap(a, g, hand) {
+    a.built.root.updateMatrixWorld(true);
+    const aim = a.built.arms[hand].joint.children[0];
+    const tris = [];
+    aim.traverse(o => {
+      if (!o.isMesh || o === g || isPropPart(o, g) || (o.material && o.material.side === THREE.BackSide)) return;
+      const pos = o.geometry.attributes.position;
+      const idx = o.geometry.index;
+      const v = i => new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      const n = idx ? idx.count : pos.count;
+      for (let i = 0; i < n; i += 3) tris.push(new THREE.Triangle(v(idx ? idx.getX(i) : i), v(idx ? idx.getX(i + 1) : i + 1), v(idx ? idx.getX(i + 2) : i + 2)));
+    });
+    let best = Infinity;
+    const qq = new THREE.Vector3();
+    g.traverse(o => {
+      if (!o.isMesh) return;
+      const pos = o.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const p = new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+        for (const t of tris) {
+          t.closestPointToPoint(p, qq);
+          const d = qq.distanceTo(p);
+          if (d < best) best = d;
+        }
+      }
+    });
+    return best;
+  }
+  function isPropPart(o, g) {
+    for (let p = o; p; p = p.parent) if (p === g) return true;
+    return false;
+  }
+
+  function pose(a, c, t) {
+    if (c.clip && ANIMS[c.clip]) {
+      const p = animSampleClip(ANIMS[c.clip], t);
+      delete p.face;
+      animApplyPose(a, p);
+    } else playAct(a, c.act, 'normal', t);
+    a.built.root.updateMatrixWorld(true);
+  }
+  const durOf = c => (c.clip && ANIMS[c.clip] ? ANIMS[c.clip].dur : ACT_DUR);
+
+  // 한 배치로 조합들의 전 구간 최소 간격. stopBelow보다 작아지면 바로 멈춘다
+  function minGap(a, prop, list, fit, stopBelow = -Infinity) {
+    let worst = Infinity;
+    const g = attach(a, prop, fit);
+    if (!g) return { gap: Infinity, frames: 0 };
+    let frames = 0;
+    try {
+      for (const c of list) {
+        for (let t = 0; t <= durOf(c) + 1e-6; t += STEP) {
+          pose(a, c, t);
+          frames++;
+          for (const p of propPoints(a, g)) {
+            const d = pointGap(a.body, p);
+            if (d < worst) worst = d;
+            if (worst < stopBelow) return { gap: worst, frames };
+          }
+        }
+      }
+    } finally {
+      detach(g);
+      pose(a, { act: null }, 0);
+    }
+    return { gap: worst, frames };
+  }
+
+  function solve(ids = root.Village.CAST.map(c => c.id)) {
+    const all = combos();
+    const out = {};
+    const log = [];
+    for (const id of ids) {
+      const a = makeActor(id);
+      out[id] = {};
+      for (const prop of Object.keys(BUILD)) {
+        const list = all.filter(c => c.prop === prop);
+        if (!list.length) continue;
+        let found = null;
+        // 손에 닿은 채로(R5: 소품과 손 표면 0.03 이하) 몸과 간격이 나는(R6) 배치만. 떠 보이는 배치는 후보가 아니다
+        search: for (const s of [1, 0.85, 0.7, 0.55]) {
+          const cands = [];
+          for (const o of ['f', 'mix', 'arm']) for (const av of [0, 0.02, 0.04]) for (const bv of [0, 0.02, 0.04]) cands.push({ a: av, b: bv, s, o });
+          cands.sort((x, y) => (x.a + x.b) - (y.a + y.b));
+          for (const f of cands) {
+            const g = attach(a, prop, f);
+            const hg = g ? handGap(a, g, HAND[prop]) : Infinity;
+            detach(g);
+            if (hg > HAND_TOUCH) continue;
+            const r = minGap(a, prop, list, f, GAP);
+            if (r.gap >= GAP) {
+              found = { ...f, gap: +r.gap.toFixed(3), hand: +hg.toFixed(3) };
+              break search;
+            }
+          }
+        }
+        out[id][prop] = found || { skip: true };
+        log.push(`${id} ${prop}: ${found ? `o=${found.o} a=${found.a} b=${found.b} s=${found.s} gap=${found.gap} hand=${found.hand}` : '손에 닿은 채로는 몸을 피할 수 없음 → 이 동작에서는 표시 안 함'}`);
+      }
+      a.built.dispose();
+    }
+    return { fit: out, log };
+  }
+
+  function verify(fit = FIT, ids = root.Village.CAST.map(c => c.id)) {
+    const all = combos();
+    const rows = [];
+    for (const id of ids) {
+      const a = makeActor(id);
+      for (const c of all) {
+        const f = (fit[id] || {})[c.prop];
+        if (!f || f.skip) {
+          rows.push({ id, prop: c.prop, motion: c.clip || c.act, frames: 0, minGap: null, pass: true, note: '표시 안 함' });
+          continue;
+        }
+        const g = attach(a, c.prop, f);
+        const hg = g ? handGap(a, g, HAND[c.prop]) : null;
+        detach(g);
+        const r = minGap(a, c.prop, [c], f);
+        rows.push({ id, prop: c.prop, motion: c.clip || c.act, frames: r.frames, minGap: +r.gap.toFixed(3), handGap: hg === null ? null : +hg.toFixed(3), pass: r.gap >= 0.03 && hg !== null && hg <= HAND_TOUCH });
+      }
+      a.built.dispose();
+    }
+    return rows;
+  }
+
+  root.PropCheck = { solve, verify, combos, handGap, GAP, STEP, HAND_TOUCH };
+}(typeof self !== 'undefined' ? self : this));

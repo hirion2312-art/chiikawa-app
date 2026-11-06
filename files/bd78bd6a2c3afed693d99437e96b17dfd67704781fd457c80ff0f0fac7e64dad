@@ -1,0 +1,96 @@
+'use strict';
+
+// 치이카와 심즈 — 월드 오브젝트 상호작용 표 (심즈의 "스마트 오브젝트")
+// 오브젝트(장소의 소켓)가 "나를 쓰면 이만큼 채워 준다"를 알리고, 캐릭터는 지금 모자란 욕구로 점수를 매겨 고른다.
+// 캐릭터 전용 행동은 없다. 어떤 캐릭터든 쓸 수 있다.
+//
+// 욕구 5종 (0~100, 높을수록 만족): hunger 배부름 · energy 기력 · fun 즐거움 · social 친구 · hygiene 청결
+// 항목 형식:
+//   id, place(장소 id), name(메뉴 이름), steps[{ socket(이름 | 'a_*' 빈자리 아무거나 | 'a|b' 중 하나), act(동작), clip?(anims.js), min(게임 분) }]
+//   prop: 그 단계에 꼭 필요한 손 소품(bowl·cup·ticket·book·rod·towel). 적힌 단계의 애니메이션 동안에만 손에 배치된다 (village-props.js)
+//   gain{욕구: 전체 증가량}  — 단계를 하는 동안 나눠서 채워진다
+//   cost 드는 돈 · earn 버는 돈 · hours[시작, 끝] 이용 시간 · group true면 같은 장소에 다른 캐릭터가 있을 때 친구 욕구가 함께 찬다
+//   night true면 밤(21시 이후)에 점수가 크게 오른다 (잠) · shared true면 자리를 여럿이 함께 쓴다 (집 안으로 들어가는 잠)
+(function (root) {
+  const I = (place, id, name, steps, gain, more = {}) => ({ id: `${place}.${id}`, place, name, steps, gain, ...more });
+  const S = (socket, act, min, clip, prop) => ({ socket, act, min, clip, prop });
+
+  const LIST = [
+    /* ---------- 먹고 마시기 ---------- */
+    I('ramenRo', 'ramen', '라멘 먹기', [S('ticket_buy', 'ticket', 3, null, 'ticket'), S('counter_sit_*', 'eat', 25, 'ramen_eat_noodles', 'bowl')], { hunger: 70, fun: 15 }, { cost: 900, hours: [11, 22], group: true }),
+    I('ramenYama', 'ramen', '라멘 먹기', [S('ticket_buy', 'ticket', 3, null, 'ticket'), S('counter_sit_*', 'eat', 25, 'ramen_eat_noodles', 'bowl')], { hunger: 65, fun: 12 }, { cost: 850, hours: [11, 22], group: true }),
+    I('umaCurry', 'curry', '카레 먹기', [S('counter_sit_*|challenge_sit', 'eat', 22, 'eat_bowl', 'bowl')], { hunger: 60, fun: 10 }, { cost: 800, hours: [11, 21], group: true }),
+    I('umaiya', 'meal', '정식 먹기', [S('order_front', 'talk', 3), S('table_sit_*', 'eat', 30, 'eat_bowl', 'bowl')], { hunger: 65, fun: 12, social: 5 }, { cost: 950, hours: [11, 23], group: true }),
+    I('kissa', 'tea', '차 마시기', [S('table_sit_*|counter_sit', 'drink', 25, 'drink', 'cup')], { fun: 20, energy: 12, hunger: 8 }, { cost: 400, hours: [9, 20], group: true }),
+    I('soba', 'soba', '서서 소바 먹기', [S('order_front', 'talk', 2), S('eat_stand_*', 'eat', 12, 'eat_bowl', 'bowl')], { hunger: 50 }, { cost: 500, hours: [7, 21] }),
+    I('market', 'takoyaki', '타코야키 먹기', [S('takoyaki.order_front', 'talk', 2), S('takoyaki.eat_sit_*', 'eat', 15, 'eat_bowl', 'bowl')], { hunger: 35, fun: 12 }, { cost: 500, hours: [10, 20], group: true }),
+    I('mucha', 'shop', '장 봐서 간식 먹기', [S('shelf_look_*', 'browse', 10), S('checkout_stand', 'talk', 4)], { hunger: 30, fun: 12 }, { cost: 600, hours: [8, 22] }),
+    I('machioka', 'snack', '과자 사 먹기', [S('shelf_look_l|shelf_look_r', 'browse', 8), S('door_front', 'eat', 6, 'eat_bowl')], { hunger: 20, fun: 18 }, { cost: 300, hours: [9, 21] }),
+    I('shimajiro', 'ramen', '섬 라멘 먹기', [S('counter_stand', 'talk', 2), S('table_sit_*', 'eat', 25, 'ramen_eat_noodles', 'bowl')], { hunger: 70, fun: 18 }, { cost: 900, hours: [11, 20], group: true }),
+
+    /* ---------- 솟는 곳: 공짜 음식 ---------- */
+    I('rice', 'rice', '솟는 밥 퍼 먹기', [S('pakapaka_front', 'poke', 3), S('scoop_stand|bowl_stand', 'eat', 15, 'eat_bowl', 'bowl')], { hunger: 45 }, { group: true }),
+    I('servers', 'dashi', '다시 받아 마시기', [S('tap_stand', 'pour', 3), S('shade_sit', 'drink', 12, 'drink', 'cup')], { hunger: 25, fun: 6 }, { group: true }),
+    I('misoBank', 'miso', '된장국 떠 마시기', [S('taste_stand_n|taste_stand_s|ladle_stand', 'drink', 10, 'drink', 'cup')], { hunger: 25, energy: 5 }),
+    I('sausage', 'sausage', '어육소시지 뜯어 먹기', [S('pull_stand', 'bite', 12, 'eat_bowl')], { hunger: 40, fun: 10 }),
+    I('softcream', 'cream', '소프트크림 먹기', [S('pick_stand', 'poke', 3), S('shade_sit|float_stand', 'eat', 10, 'eat_bowl')], { hunger: 20, fun: 22 }),
+    I('castella', 'climb', '카스텔라 위에서 뛰기', [S('stairs_base', 'walk', 2), S('top_bounce|top_bounce_2', 'play', 12, 'jump_joy')], { fun: 35, energy: -8, hunger: 10 }),
+    I('bigPudding', 'slide', '푸딩 미끄럼 타기', [S('ladder_stand', 'walk', 2), S('slide_start', 'play', 6, 'jump_joy'), S('slide_end', 'play', 4, 'jump_joy')], { fun: 40, energy: -6 }),
+
+    /* ---------- 쉬기 · 자기 ---------- */
+    I('plaza', 'bench', '벤치에 앉아 쉬기', [S('bench_sit_a|bench_sit_b', 'sit', 20, 'sit_idle')], { energy: 15, fun: 5 }, { group: true }),
+    I('statue', 'bench', '공원 벤치에서 쉬기', [S('bench_sit_*', 'sit', 20, 'sit_idle')], { energy: 15, fun: 5 }, { group: true }),
+    I('weeding', 'rest', '그늘에서 쉬기', [S('rest_sit', 'sit', 15, 'sit_idle')], { energy: 18 }),
+    I('pharmacy', 'wait', '대기 의자에서 쉬기', [S('wait_sit_*', 'sit', 15, 'sit_idle')], { energy: 12 }),
+    I('arbiter', 'wait', '대기석에서 쉬기', [S('wait_sit', 'sit', 15, 'sit_idle')], { energy: 12 }),
+    I('islandPlaza', 'fire', '모닥불 쬐기', [S('sit_*', 'sit', 30, 'sit_idle')], { energy: 15, fun: 15, social: 10 }, { group: true }),
+    I('hiroma', 'fire', '모닥불 앞에 앉기', [S('table_sit_*|bench_sit', 'sit', 25, 'sit_idle')], { energy: 12, fun: 10 }, { group: true }),
+    I('bungalow', 'hammock', '해먹에서 낮잠', [S('hammock_lie', 'nap', 60, 'sleep_breathe')], { energy: 45, fun: 8 }),
+    I('cave', 'tea', '동굴 찻상에서 쉬기', [S('tea_sit', 'drink', 20, 'drink', 'cup')], { energy: 15, fun: 10 }, { group: true }),
+    // 잠: 집·동굴·방갈로 어디서든. 밤에 점수가 크게 오른다
+    I('home', 'sleep', '집에서 자기', [S('door_front', 'enter', 2), S('door_front', 'sleep', 420, 'sleep_breathe')], { energy: 100 }, { night: true, hide: true, shared: true }),
+    I('cave', 'sleep', '동굴에서 자기', [S('enter_stand', 'enter', 2), S('enter_stand', 'sleep', 420, 'sleep_breathe')], { energy: 100 }, { night: true, hide: true, shared: true }),
+    I('bungalow', 'sleep', '방갈로에서 자기', [S('door_1|door_2', 'enter', 2), S('door_1|door_2', 'sleep', 420, 'sleep_breathe')], { energy: 100 }, { night: true, hide: true, shared: true }),
+
+    /* ---------- 씻기 ---------- */
+    I('onsen', 'bath', '온천에 몸 담그기', [S('towel_stand', 'wipe', 3, null, 'towel'), S('soak_*|big_bath', 'bath', 30), S('towel_stand', 'wipe', 3, null, 'towel')], { hygiene: 70, energy: 20, fun: 12 }, { cost: 500, group: true }),
+    I('onsen', 'bubble', '거품 놀이', [S('bubble_play', 'play', 15, 'jump_joy')], { hygiene: 30, fun: 25 }, { group: true }),
+    I('sauna', 'sauna', '사우나 하기', [S('sauna_door', 'sit', 15, 'sit_idle'), S('cold_soak', 'bath', 8), S('shower_sit', 'wipe', 6, null, 'towel')], { hygiene: 60, energy: 15 }, { cost: 400 }),
+
+    /* ---------- 놀기 ---------- */
+    I('plaza', 'dance', '스피커 앞에서 춤추기', [S('speaker_dance', 'dance', 12, 'dance_light')], { fun: 30, energy: -5 }, { group: true }),
+    I('plaza', 'music', '음악 듣기', [S('speaker_listen', 'sway', 15, 'idle_hum')], { fun: 20 }, { group: true }),
+    I('plaza', 'board', '게시판 구경', [S('board_check_a|board_check_b', 'read', 6)], { fun: 8 }),
+    I('stage', 'perform', '무대에서 공연하기', [S('perform_*', 'dance', 20, 'dance_light')], { fun: 35, social: 15, energy: -10 }, { group: true }),
+    I('stage', 'watch', '공연 구경하기', [S('audience_*', 'sit', 20, 'sit_idle')], { fun: 25, social: 10 }, { group: true }),
+    I('internet', 'pc', '인터넷 하기', [S('pc_sit_*', 'type', 25)], { fun: 25, social: 5 }, { cost: 100, group: true }),
+    I('pond', 'fish', '낚시하기', [S('fish_sit', 'fish', 40, null, 'rod')], { fun: 25, energy: 5 }, { earn: 150 }),
+    I('pond', 'look', '연못 구경', [S('pond_look', 'gaze', 8, 'idle_look')], { fun: 10 }),
+    I('cycle', 'tandem', '2인 자전거 타기', [S('rent_stand', 'talk', 2), S('tandem_sit_*', 'play', 20)], { fun: 35, social: 15 }, { cost: 300, group: true }),
+    I('bridge', 'cross', '흔들다리 건너기', [S('cross_start', 'walk', 1), S('cross_mid', 'peek', 4, 'surprised'), S('cross_end', 'walk', 1)], { fun: 25 }),
+    I('pier', 'boat', '배에 앉아 바다 보기', [S('boat_sit_*', 'sit', 20, 'sit_idle')], { fun: 18, energy: 8 }, { group: true }),
+    I('seaCave', 'look', '해변 동굴 구경', [S('pool_look|shore_stand', 'gaze', 10, 'idle_look')], { fun: 15 }),
+    I('arcade', 'peek', '폐 게임센터 엿보기', [S('window_peek', 'peek', 6, 'idle_look')], { fun: 15 }),
+    I('goblin', 'peek', '고블린 동굴 엿보기', [S('torch_look|bone_look', 'peek', 5, 'surprised')], { fun: 20, energy: -4 }),
+    I('yamanba', 'peek', '야만바의 집 엿보기', [S('pot_look|candy_look', 'peek', 5, 'surprised')], { fun: 20 }),
+    I('recycle', 'browse', '리사이클 숍 구경', [S('browse_stand|tv_look', 'browse', 12)], { fun: 15 }),
+    I('market', 'clothes', '포셰트 노점 구경', [S('clothes.browse_front', 'browse', 10)], { fun: 15 }),
+    I('market', 'books', '헌책 읽기', [S('books.browse_front', 'read', 15, null, 'book')], { fun: 18 }),
+    I('market', 'pottery', '그릇 구경', [S('pottery.browse_front', 'browse', 8)], { fun: 10 }),
+    I('shrine', 'pray', '신사 참배', [S('torii_pass', 'walk', 1), S('pray_stand|offer_stand', 'pray', 5)], { fun: 12 }),
+    I('statue', 'oath', '기념공원군 상 따라 하기', [S('oath_stand', 'pose', 4, 'jump_joy')], { fun: 12 }),
+
+    /* ---------- 일하기 (돈) ---------- */
+    I('weeding', 'weed', '풀뽑기', [S('pull_*', 'weed', 45), S('pile_stand', 'carry', 4)], { energy: -20, fun: -4, hygiene: -15 }, { earn: 900, hours: [8, 17] }),
+    I('hunt', 'train', '토벌 훈련', [S('charge_start', 'brave', 2), S('dummy_front|target_front', 'confront', 25)], { energy: -25, fun: 10, hygiene: -10 }, { earn: 600, hours: [8, 18] }),
+    I('lemon', 'sticker', '레몬 스티커 붙이기', [S('work_sit_*', 'work', 50)], { energy: -15, fun: -8 }, { earn: 1000, hours: [9, 18], group: true }),
+    I('exam', 'study', '검정 공부', [S('desk_sit_*|board_look', 'study', 30, null, 'book')], { energy: -8, fun: -6 }, { hours: [9, 18], skill: 'grass' }),
+  ];
+
+  // 둘이 마주 보고 하는 수다 (오브젝트 없이, 상대 캐릭터가 "오브젝트")
+  const CHAT = { id: 'chat', name: '수다 떨기', gain: { social: 35, fun: 10 }, min: 12 };
+
+  const BY_ID = Object.fromEntries(LIST.map(x => [x.id, x]));
+  const NEEDS = [['hunger', '배부름', '#f9a55f'], ['energy', '기력', '#f2c230'], ['fun', '즐거움', '#78c46d'], ['social', '친구', '#f2748e'], ['hygiene', '청결', '#6fb3e0']];
+  root.VillageObjects = { LIST, BY_ID, CHAT, NEEDS };
+}(typeof self !== 'undefined' ? self : this));

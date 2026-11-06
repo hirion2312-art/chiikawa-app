@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>치이카와 심즈</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 28C4 20 2 13 6 8c3-4 8-2 10 2 2-4 7-6 10-2 4 5 2 12-10 20z' fill='%23f2748e' stroke='%234a3230' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+  /* 심즈식 화면 배치 + 치이카와 그림책 디자인: 크림색 종이, 굵은 갈색 테두리, 파스텔, 아래로 떨어지는 단단한 그림자 */
+  :root {
+    --paper: #fffaf0; --cream: #fff3d6; --ink: #4a3230; --quiet: #8a7566; --line: #ead9bb;
+    --pink: #f6bcc8; --pink-d: #f2748e; --mint: #bfe6c4; --sky: #cfeaf4; --butter: #ffe59a;
+    --good: #78c46d; --ok: #f2c230; --bad: #e0607a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--sky); color: var(--ink); font: 13px/1.45 "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; user-select: none; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  #world { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: 0; }
+  #tint { position: fixed; inset: 0; pointer-events: none; mix-blend-mode: multiply; transition: background 2s; }
+  .ui { position: fixed; z-index: 10; background: var(--paper); border: 3px solid var(--ink); border-radius: 22px; box-shadow: 0 5px 0 var(--ink); }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 11px; background: #fff; border: 2.5px solid var(--ink); border-radius: 999px; font-weight: 700; white-space: nowrap; }
+  .round { display: grid; place-items: center; width: 38px; height: 38px; padding: 0; background: #fff; border: 2.5px solid var(--ink); border-radius: 50%; box-shadow: 0 3px 0 var(--ink); font-size: 14px; font-weight: 700; line-height: 1; }
+  .round:active, .tab:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+  .pill:active { transform: translate(-50%, calc(-50% + 2px)); box-shadow: 0 1px 0 var(--ink); }
+  .round.on { background: var(--pink); }
+
+  /* 위 가운데: 날짜·시계·빠르기 */
+  #clock { left: 50%; top: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 8px; }
+  #clock .sky { width: 40px; height: 40px; display: grid; place-items: center; font-size: 22px; background: var(--butter); border: 2.5px solid var(--ink); border-radius: 50%; }
+  #clock .when { min-width: 100px; text-align: center; line-height: 1.15; }
+  #clock .when small { display: block; color: var(--quiet); font-weight: 700; }
+  #clock .when b { font-size: 21px; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+  #clock .speeds { display: flex; gap: 5px; }
+  #clock .speeds .round { width: 40px; font-size: 12px; letter-spacing: -2px; }
+
+  /* 위 오른쪽: 마을 소식 알림 */
+  #toasts { position: fixed; z-index: 11; right: 14px; top: 14px; width: 270px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+  .toast { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; background: var(--paper); border: 2.5px solid var(--ink); border-radius: 16px; box-shadow: 0 4px 0 var(--ink); animation: pop .35s cubic-bezier(.3, 1.6, .5, 1); transition: opacity .6s, transform .6s; }
+  .toast i { font-style: normal; font-size: 18px; line-height: 1.2; }
+  .toast small { display: block; color: var(--quiet); }
+  .toast.out { opacity: 0; transform: translateX(30px); }
+  @keyframes pop { from { transform: scale(.6); opacity: 0; } }
+
+  /* 아래 왼쪽: 가족(출연진) 줄 + 고른 캐릭터 */
+  #family { left: 14px; bottom: 196px; display: flex; gap: 7px; padding: 7px 10px; border-radius: 999px; }
+  .mate { position: relative; width: 46px; height: 46px; padding: 0; background: var(--cream); border: 2.5px solid var(--ink); border-radius: 50%; transition: transform .15s; }
+  .mate img, .face img { width: 100%; height: 100%; border-radius: 50%; display: block; object-fit: cover; }
+  .mate .dot { position: absolute; right: -4px; bottom: -4px; width: 16px; height: 16px; border: 2.5px solid var(--ink); border-radius: 50%; }
+  .mate.on { box-shadow: 0 0 0 3px #fff, 0 0 0 6px var(--pink-d); }
+  .mate:hover { transform: translateY(-3px); }
+  .mate .zz { position: absolute; left: -5px; top: -8px; font-size: 13px; }
+
+  #me { left: 14px; bottom: 14px; width: 530px; height: 170px; padding: 12px 14px 12px 154px; }
+  #me .face { position: absolute; left: 12px; top: -28px; width: 132px; height: 132px; padding: 0; background: var(--cream); border: 3.5px solid var(--ink); border-radius: 50%; box-shadow: 0 5px 0 var(--ink); }
+  #me .plate { position: absolute; left: 12px; top: 110px; width: 132px; text-align: center; }
+  #me .plate b { display: inline-block; padding: 2px 12px; font-size: 15px; background: var(--pink); border: 2.5px solid var(--ink); border-radius: 999px; }
+  #me .plate small { display: block; margin-top: 3px; font-weight: 700; }
+  #me .money { position: absolute; right: 14px; top: 11px; background: var(--butter); }
+  #me h4 { margin: 0 0 2px; font-size: 12px; color: var(--quiet); }
+  #me .doing { font-size: 16px; font-weight: 700; margin: 0 120px 10px 0; min-height: 23px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .queue { display: flex; gap: 12px; align-items: center; }
+  .q { position: relative; flex: none; width: 56px; height: 56px; display: grid; place-items: center; padding: 0; font-size: 24px; background: #fff; border: 2.5px solid var(--ink); border-radius: 18px; box-shadow: 0 3px 0 var(--ink); }
+  .q.now { width: 66px; height: 66px; font-size: 28px; border-radius: 20px; background: var(--mint); }
+  .q .fill { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(120, 196, 109, .55); border-radius: 0 0 16px 16px; transition: height .4s; }
+  .q .ico { position: relative; }
+  .q .x { position: absolute; right: -9px; top: -9px; width: 22px; height: 22px; padding: 0; font-size: 11px; line-height: 1; background: #fff; border: 2px solid var(--ink); border-radius: 50%; }
+  .q .x:hover { background: var(--pink); }
+  .q .lab { position: absolute; left: 50%; bottom: -20px; transform: translateX(-50%); font-size: 11px; font-weight: 700; white-space: nowrap; max-width: 62px; overflow: hidden; text-overflow: ellipsis; }
+  .q.empty { border-style: dashed; box-shadow: none; background: transparent; color: #c9b79d; font-size: 18px; }
+
+  /* 아래 오른쪽: 욕구 · 하고 싶은 것 · 마을 소식 */
+  #panel { right: 14px; bottom: 14px; width: 360px; min-height: 170px; padding: 0 14px 12px; }
+  .tabs { display: flex; gap: 6px; margin: -18px 0 8px; }
+  .tab { padding: 5px 13px; font-weight: 700; background: var(--cream); border: 2.5px solid var(--ink); border-radius: 999px; box-shadow: 0 3px 0 var(--ink); }
+  .tab.on { background: var(--pink); }
+  .need { display: grid; grid-template-columns: 24px 50px 1fr; align-items: center; gap: 6px; margin: 5px 0; }
+  .need i { font-style: normal; font-size: 17px; text-align: center; }
+  .need span { font-weight: 700; }
+  .meter { height: 18px; padding: 2px; background: #fff; border: 2.5px solid var(--ink); border-radius: 999px; overflow: hidden; }
+  .meter b { display: block; height: 100%; min-width: 6px; border-radius: 999px; transition: width .4s; }
+  .meter b.low { animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .4; } }
+  .wish { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 2px dotted var(--line); }
+  .wish i { font-style: normal; font-size: 18px; width: 24px; text-align: center; }
+  .wish .grow { flex: 1; min-width: 0; }
+  .wish .grow b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wish small { display: block; color: var(--quiet); }
+  .wish button { padding: 2px 10px; font-weight: 700; background: #fff; border: 2px solid var(--ink); border-radius: 999px; }
+  .wish button:hover { background: var(--pink); }
+  .news { max-height: 150px; overflow: auto; }
+  .news div { padding: 3px 0; border-bottom: 2px dotted var(--line); }
+  .news small { color: var(--quiet); margin-right: 6px; font-variant-numeric: tabular-nums; }
+  .quiet { color: var(--quiet); }
+
+  /* 파이 메뉴: 누른 자리 둘레에 할 수 있는 일 */
+  #pie { position: fixed; z-index: 30; inset: 0; }
+  #pie .hub { position: absolute; transform: translate(-50%, -50%); min-width: 118px; max-width: 180px; padding: 7px 14px; text-align: center; background: var(--paper); border: 3px solid var(--ink); border-radius: 22px; box-shadow: 0 4px 0 var(--ink); animation: pop .25s cubic-bezier(.3, 1.6, .5, 1); }
+  #pie .hub b { display: block; font-size: 15px; }
+  #pie .hub small { display: block; color: var(--quiet); font-weight: 700; font-size: 11px; }
+  .pill { position: absolute; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 6px; padding: 6px 14px 6px 7px; font-weight: 700; text-align: left; background: #fff; border: 2.5px solid var(--ink); border-radius: 999px; box-shadow: 0 3px 0 var(--ink); white-space: nowrap; animation: fly .3s cubic-bezier(.3, 1.4, .5, 1) both; }
+  .pill i { flex: none; font-style: normal; display: grid; place-items: center; width: 28px; height: 28px; font-size: 15px; background: var(--cream); border: 2px solid var(--ink); border-radius: 50%; }
+  .pill:hover { background: var(--pink); }
+  .pill.no { background: #f3ede2; color: var(--quiet); border-style: dashed; box-shadow: none; cursor: default; }
+  .pill small { display: block; font-size: 11px; line-height: 1.2; color: var(--bad); }
+  @keyframes fly { from { left: var(--cx); top: var(--cy); opacity: 0; transform: translate(-50%, -50%) scale(.4); } }
+  #tip { position: fixed; z-index: 31; transform: translate(-50%, 0); max-width: 330px; padding: 6px 12px; font-size: 12px; text-align: center; background: #fff; border: 2.5px solid var(--ink); border-radius: 14px; pointer-events: none; }
+  .eff .up { color: #2f7d42; font-weight: 700; } .eff .down { color: #b5443c; font-weight: 700; }
+
+  #helpBtn { position: fixed; z-index: 10; left: 14px; top: 14px; }
+  #help { left: 14px; top: 62px; width: 310px; padding: 10px 14px; font-size: 12px; }
+  #help b { display: block; margin-bottom: 4px; font-size: 14px; }
+  #loading { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; background: var(--cream); font-size: 18px; font-weight: 700; }
+  [hidden] { display: none !important; }
+  @media (max-width: 1200px) { #panel { width: 300px; } #me { width: 460px; } #toasts { width: 230px; } }
+</style>
+</head>
+<body>
+<canvas id="world" tabindex="0" aria-label="치이카와 마을 3D 화면"></canvas>
+<div id="tint"></div>
+<div id="clock" class="ui"></div>
+<div id="toasts" aria-live="polite"></div>
+<div id="family" class="ui"></div>
+<div id="me" class="ui"></div>
+<div id="panel" class="ui"></div>
+<div id="pie" hidden></div>
+<div id="tip" hidden></div>
+<button id="helpBtn" class="round" type="button" title="조작법">?</button>
+<div id="help" class="ui" hidden><b>조작법</b>아래 동그라미 얼굴을 누르면 그 캐릭터를 돌봐요 · 건물·장소·다른 캐릭터를 누르면 둘레에 할 수 있는 일이 떠요 · 시킨 일은 줄을 서서 차례로 해요 · 드래그 회전 · 휠 확대 · WASD 카메라 이동 · Space 멈춤 · Esc 메뉴 닫기</div>
+<div id="loading">마을을 불러오는 중이에요</div>
+<script src="vendor/three.min.js"></script>
+<script src="face-scan-data.js"></script>
+<script src="character.js"></script>
+<script src="glb-loader.js"></script>
+<script src="glb-world.js"></script>
+<script src="world.js"></script>
+<script src="world-art.js"></script>
+<script src="world-town.js"></script>
+<script src="actor-kit.js"></script>
+<script src="anims.js"></script>
+<script src="anims/props.js"></script>
+<script src="anim-rig.js"></script>
+<script src="anims-base.js"></script>
+<script src="village-props.js"></script>
+<script src="sockets.js"></script>
+<script src="village-objects.js"></script>
+<script src="village-nav.js"></script>
+<script src="village-sim.js"></script>
+<script src="contact-check.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
