@@ -1,0 +1,126 @@
+'use strict';
+
+// 치이카와 심즈 — 얼굴 설정 툴 (2026-11-10 이재헌 지시)
+// 캐릭터별로 가진 얼굴 프리셋을 모두 불러와, 상황(기본·기쁨·울음·놀람·먹기·취함 …)마다 어떤 얼굴을 쓸지 고른다.
+// 고르면 바로 게임 속 캐릭터 얼굴로 미리 보여 주고, 저장하면 persona.js가 읽는 localStorage('chiikawa-face-map')에 들어간다.
+// 파일로 내보내기·불러오기(face-map.json)도 된다. 기분 단계별 기본 상황(moodFace)도 바꿀 수 있다.
+(function (root) {
+  const KEY = 'chiikawa-face-map';
+  const LABEL = {
+    normal: '기본', smile: '미소', joy: '기쁨', cry: '울음', wail: '엉엉', panic: '당황', surprised: '놀람', nope: '싫어',
+    worried: '걱정', tired: '지침', brave: '용기', flustered: '허둥', excited: '신남', eating: '먹는 중', drunk: '취함', hangover: '숙취',
+  };
+  const MOOD_LABEL = { great: '기분 최고', ok: '보통', bad: '나쁨', tired: '피곤', hangover: '숙취' };
+  const load = () => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); return j && j.faces ? j : { faces: {}, moodFace: {} }; } catch (e) { return { faces: {}, moodFace: {} }; } };
+  const save = m => { try { localStorage.setItem(KEY, JSON.stringify(m)); } catch (e) { /* 저장 실패 */ } };
+  const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); Object.assign(e, attrs); for (const k of kids) e.append(k); return e; };
+
+  let panel = null, map = null, cur = null, preview = null;
+  function css() {
+    if (document.getElementById('faceToolCss')) return;
+    const s = el('style', { id: 'faceToolCss' });
+    s.textContent = `
+#faceTool{position:fixed;z-index:40;right:16px;top:64px;width:min(420px,calc(100vw - 32px));max-height:calc(100vh - 90px);overflow:auto;background:#fff8ec;border:2.5px solid #4a3230;border-radius:16px;box-shadow:0 5px 0 #4a3230;font:600 13px "Malgun Gothic",sans-serif;color:#4a3230;padding:12px}
+#faceTool h3{margin:0 0 8px;font-size:16px}
+#faceTool .chars{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+#faceTool .chars button{border:2px solid #4a3230;border-radius:999px;background:#fff;padding:3px 9px;font:inherit;cursor:pointer}
+#faceTool .chars button.on{background:#f7d58a}
+#faceTool table{width:100%;border-collapse:collapse}
+#faceTool td{padding:3px 2px;border-bottom:1px dashed #e2d3bd}
+#faceTool select{width:100%;font:inherit;border:1.5px solid #c9b79f;border-radius:8px;padding:2px}
+#faceTool .row{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+#faceTool .row button{flex:1;border:2px solid #4a3230;border-radius:10px;background:#fff;padding:5px;font:inherit;cursor:pointer}
+#faceTool .pv{display:inline-block;width:22px;text-align:center;cursor:pointer}
+#faceTool .muted{color:#9a8574;font-weight:500}`;
+    document.head.append(s);
+  }
+  const chars = () => (root.game && root.game.sim ? root.game.sim.chars.filter(c => !c.extra || c.troupe) : []);
+  const actorOf = c => root.game && root.game.actors && root.game.actors.find(a => a.c === c);
+  const presets = c => { try { return expressionsFor(c.id); } catch (e) { return []; } };
+  const ownerOf = c => { try { const en = characterEntry(c.id); return (en && (en.faceOwner || en.id)) || c.id; } catch (e) { return c.id; } };
+
+  // 미리보기: 고른 얼굴을 2.5초 동안 게임 속 캐릭터에 씌운다 (그 사이 카메라도 그 캐릭터로)
+  function show(c, id) {
+    const a = actorOf(c);
+    if (!a || !a.built.setExpression) return;
+    preview = { a, id, until: performance.now() + 2500 };
+    a.built.setExpression(id);
+    if (root.game.view) Object.assign(root.game.view, { x: c.x, z: c.z, dist: 6 });
+  }
+  function tick() {
+    if (preview && performance.now() < preview.until) preview.a.built.setExpression(preview.id);
+    else preview = null;
+    requestAnimationFrame(tick);
+  }
+
+  function render() {
+    panel.innerHTML = '';
+    const list = chars();
+    if (!cur && list.length) cur = list[0];
+    const head = el('h3', { textContent: '얼굴 설정' });
+    const bar = el('div', { className: 'chars' });
+    for (const c of list) {
+      const b = el('button', { type: 'button', textContent: c.name, className: c === cur ? 'on' : '' });
+      b.onclick = () => { cur = c; render(); };
+      bar.append(b);
+    }
+    panel.append(head, bar);
+    if (!cur) { panel.append(el('div', { className: 'muted', textContent: '게임이 시작된 뒤에 열 수 있어요' })); return; }
+    const owner = ownerOf(cur);
+    const opts = presets(cur);
+    const base = (root.Persona.FACES || {})[cur.id] || {};
+    const mine = map.faces[owner] || (map.faces[owner] = {});
+    const info = el('div', { className: 'muted', textContent: `${cur.name}의 얼굴 프리셋 ${opts.length}개 · 고르면 바로 미리 보여요 (👁 다시 보기)` });
+    const table = el('table');
+    for (const key of root.Persona.FACE_KEYS || Object.keys(LABEL)) {
+      const sel = el('select');
+      sel.append(el('option', { value: '', textContent: `기본값 (${base[key] ? labelOf(opts, base[key]) : '없음'})` }));
+      for (const e of opts) sel.append(el('option', { value: e.id, textContent: `${e.label || e.id}` }));
+      sel.value = mine[key] || '';
+      sel.onchange = () => { if (sel.value) mine[key] = sel.value; else delete mine[key]; save(map); if (sel.value || base[key]) show(cur, sel.value || base[key]); };
+      const eye = el('span', { className: 'pv', textContent: '👁', title: '미리 보기' });
+      eye.onclick = () => { const id = mine[key] || base[key]; if (id) show(cur, id); };
+      table.append(el('tr', {}, el('td', { textContent: LABEL[key] || key }), el('td', {}, sel), el('td', {}, eye)));
+    }
+    // 기분 단계별로 쓸 상황
+    const mood = el('table');
+    for (const [tier, def] of Object.entries(root.Persona.MOOD_FACE || {})) {
+      const sel = el('select');
+      for (const key of root.Persona.FACE_KEYS || []) sel.append(el('option', { value: key, textContent: LABEL[key] || key }));
+      sel.value = (map.moodFace && map.moodFace[tier]) || def;
+      sel.onchange = () => { map.moodFace = map.moodFace || {}; map.moodFace[tier] = sel.value; save(map); };
+      mood.append(el('tr', {}, el('td', { textContent: MOOD_LABEL[tier] || tier }), el('td', {}, sel)));
+    }
+    const row = el('div', { className: 'row' });
+    const btn = (t, f) => { const b = el('button', { type: 'button', textContent: t }); b.onclick = f; row.append(b); };
+    btn('이 캐릭터 초기화', () => { delete map.faces[owner]; save(map); render(); });
+    btn('파일로 내보내기', () => {
+      const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(map, null, 1)], { type: 'application/json' })), download: 'face-map.json' });
+      a.click();
+    });
+    btn('파일 불러오기', () => document.getElementById('faceFile') && document.getElementById('faceFile').click());
+    btn('닫기', () => { panel.hidden = true; });
+    panel.append(info, table, el('h3', { textContent: '기분별 얼굴', style: 'margin-top:10px' }), mood, row);
+  }
+  const labelOf = (opts, id) => { const e = opts.find(o => o.id === id); return e ? e.label || id : id; };
+
+  function open() {
+    css();
+    map = load();
+    if (!panel) { panel = el('div', { id: 'faceTool' }); document.body.append(panel); requestAnimationFrame(tick); }
+    panel.hidden = false;
+    render();
+  }
+  // '얼' 단추: 이제 설정 툴을 연다 (파일 불러오기는 툴 안에서)
+  function hook() {
+    const b = document.getElementById('faceBtn');
+    if (!b || b.dataset.tool) return;
+    b.dataset.tool = '1';
+    b.title = '얼굴 설정';
+    b.addEventListener('click', e => { e.stopImmediatePropagation(); open(); }, true);
+    const input = document.getElementById('faceFile');
+    if (input) input.addEventListener('change', () => setTimeout(() => { if (panel && !panel.hidden) { map = load(); render(); } }, 300));
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook); else hook();
+  root.FaceTool = { open };
+}(typeof self !== 'undefined' ? self : this));

@@ -1,0 +1,175 @@
+'use strict';
+
+// 치이카와 심즈 — 타이틀 화면
+// 켜면 마을이 이미 돌아가고 있고, 메인 캐릭터 한 명을 무작위로 골라 카메라가 따라다닌다.
+// 제목 글자가 하나씩 떨어져 내려앉은 뒤, 화면을 누르면 게임이 시작된다
+(function (root) {
+  const WORDS = [{ text: '치이카와', cls: 'big' }, { text: '심즈', cls: 'sub' }];
+  const CAMERA = { pitch: 0.2, dist: 12, spin: 0.07 };
+  const pick = list => list[Math.floor(Math.random() * list.length)];
+
+  function pickStar(sim) {
+    const cast = sim.chars.filter(c => !c.extra && !c.troupe && !c.monster && !c.gone);
+    const out = cast.filter(c => !c.hidden);
+    return pick(out.length ? out : cast);
+  }
+  // 주인공과 카메라 사이를 가리는 것이 있는가
+  const ray = new THREE.Raycaster();
+  const shown = o => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+  function blocked(g, c, yaw) {
+    const y = g.world.floorAt(c.x, c.z) + (c.h || 0) + 1;
+    const dir = new THREE.Vector3(Math.sin(yaw) * Math.cos(CAMERA.pitch), Math.sin(CAMERA.pitch), Math.cos(yaw) * Math.cos(CAMERA.pitch));
+    ray.set(new THREE.Vector3(c.x, y, c.z), dir);
+    ray.far = CAMERA.dist + 1;
+    const near = g.nav.raycastable.filter(o => {
+      if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+      const s = o.geometry.boundingSphere;
+      return new THREE.Vector3().copy(s.center).applyMatrix4(o.matrixWorld).distanceTo(ray.ray.origin) < CAMERA.dist + s.radius * o.matrixWorld.getMaxScaleOnAxis() + 2;
+    });
+    return ray.intersectObjects(near, false).some(h => h.distance > 1.2 && shown(h.object));
+  }
+  function clearYaw(g, c, from) {
+    for (let i = 0; i <= 12; i++) for (const s of i ? [1, -1] : [1]) {
+      const yaw = from + s * i * (Math.PI / 12);
+      if (!blocked(g, c, yaw)) return yaw;
+    }
+    return from;
+  }
+  // 먼작귀 VILLEAGE 로고 그림: 검은 바탕을 지우고, 흰 '먼작귀' 글자에 갈색 손글씨 테두리를 두른다 (2026-11-10 이재헌 지시)
+  function logoImage() {
+    const img = new Image();
+    img.className = 'logo-img';
+    img.alt = '먼작귀 VILLEAGE';
+    const src = new Image();
+    src.onload = () => {
+      const W = src.width, H = src.height;
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      const g = c.getContext('2d'); g.drawImage(src, 0, 0);
+      const d = g.getImageData(0, 0, W, H), px = d.data;
+      let x0 = W, x1 = 0, y0 = H, y1 = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        const m = Math.max(px[i], px[i + 1], px[i + 2]);
+        px[i + 3] = Math.min(255, m * 2);
+        if (m > 40) { const k = i / 4, x = k % W, y = (k / W) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      }
+      g.putImageData(d, 0, 0);
+      // 갈색 테두리: 윗줄(먼작귀) 모양을 사방으로 조금씩 밀어 찍은 갈색 그림자 위에 원본을 다시 얹는다
+      const split = y0 + (y1 - y0) * 0.6;
+      const top = document.createElement('canvas'); top.width = W; top.height = H;
+      const tg = top.getContext('2d'); tg.drawImage(c, 0, 0, W, split, 0, 0, W, split);
+      tg.globalCompositeOperation = 'source-in'; tg.fillStyle = '#6b4226'; tg.fillRect(0, 0, W, H);
+      const out = document.createElement('canvas'); const P = 14;
+      out.width = x1 - x0 + P * 2; out.height = y1 - y0 + P * 2;
+      const og = out.getContext('2d');
+      for (let a = 0; a < 16; a++) og.drawImage(top, -x0 + P + Math.cos(a / 16 * Math.PI * 2) * 9, -y0 + P + Math.sin(a / 16 * Math.PI * 2) * 9);
+      og.drawImage(c, -x0 + P, -y0 + P);
+      img.src = out.toDataURL('image/png');
+    };
+    src.src = root.TITLE_LOGO_SRC || '';
+    return img;
+  }
+  function buildLogo() {
+    if (root.TITLE_LOGO_SRC) {
+      const logo = document.createElement('div');
+      logo.className = 'logo logo-pic';
+      logo.appendChild(logoImage());
+      return { logo, letters: 6 };
+    }
+    const logo = document.createElement('div');
+    logo.className = 'logo';
+    let n = 0;
+    for (const word of WORDS) {
+      const line = document.createElement('div');
+      line.className = `line ${word.cls}`;
+      for (const ch of word.text) {
+        const s = document.createElement('span');
+        s.textContent = ch;
+        s.style.setProperty('--i', n++);
+        line.appendChild(s);
+      }
+      logo.appendChild(line);
+    }
+    return { logo, letters: n };
+  }
+
+  root.TitleScreen = {
+    start(g) {
+      const { sim, view } = g;
+      const home = { pitch: view.pitch, dist: view.dist, yaw: view.yaw };
+      let star = pickStar(sim);
+      g.setSelected(star.id);
+      g.setFollow(true);
+      Object.assign(view, { pitch: CAMERA.pitch, dist: CAMERA.dist, yaw: clearYaw(g, star, view.yaw) });
+      root.TITLE_ON = true;
+
+      document.body.classList.add('titling');
+      const box = document.createElement('div');
+      box.id = 'title';
+      const { logo, letters } = buildLogo();
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = '화면을 눌러 시작';
+      hint.style.setProperty('--wait', `${0.5 + letters * 0.09 + 0.7}s`);
+      const who = document.createElement('div');
+      who.className = 'who';
+      who.textContent = star.name;
+      box.append(logo, hint, who);
+      document.body.appendChild(box);
+
+      // 카메라는 천천히 돌고, 주인공이 집에 들어가 사라지면 다른 주민에게 옮긴다
+      let running = true;
+      let last = performance.now();
+      let checkAt = 0;
+      let aim = null;
+      const orbit = now => {
+        if (!running) return;
+        const dt = Math.min(0.1, (now - last) / 1000);
+        last = now;
+        // 가려지면 보이는 각도로 돌아가고, 아니면 천천히 돈다
+        if (now - checkAt > 500) {
+          checkAt = now;
+          aim = blocked(g, star, view.yaw) ? clearYaw(g, star, view.yaw) : null;
+        }
+        if (aim === null) view.yaw += CAMERA.spin * dt;
+        else view.yaw += Math.max(-1.6 * dt, Math.min(1.6 * dt, Math.atan2(Math.sin(aim - view.yaw), Math.cos(aim - view.yaw))));
+        if (star.hidden) {
+          const next = pickStar(sim);
+          if (next !== star && !next.hidden) {
+            star = next;
+            g.setSelected(star.id);
+            who.textContent = star.name;
+          }
+        }
+        requestAnimationFrame(orbit);
+      };
+      requestAnimationFrame(orbit);
+
+      const ready = performance.now() + (0.5 + letters * 0.09 + 0.5) * 1000;
+      const begin = e => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (performance.now() < ready || !running) return;
+        running = false;
+        root.TITLE_ON = false;
+        window.removeEventListener('keydown', onKey, true);
+        box.classList.add('leaving');
+        document.body.classList.remove('titling');
+        // 평소 시점으로 부드럽게 빠진다
+        const from = { pitch: view.pitch, dist: view.dist };
+        const t0 = performance.now();
+        const ease = now => {
+          const u = Math.min(1, (now - t0) / 1400);
+          const k = 1 - Math.pow(1 - u, 3);
+          view.pitch = from.pitch + (home.pitch - from.pitch) * k;
+          view.dist = from.dist + (home.dist - from.dist) * k;
+          if (u < 1) requestAnimationFrame(ease);
+        };
+        requestAnimationFrame(ease);
+        setTimeout(() => box.remove(), 900);
+      };
+      const onKey = e => begin(e);
+      box.addEventListener('pointerdown', begin);
+      window.addEventListener('keydown', onKey, true);
+    },
+  };
+}(typeof self !== 'undefined' ? self : this));
