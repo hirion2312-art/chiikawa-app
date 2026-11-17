@@ -1,0 +1,17 @@
+'use strict';
+
+// 게임 업데이트 자동 적용 (2026-11-10 이재헌: "업데이트했다는데 바뀐 게 없다")
+// 앱 본체는 켜져 있는 동안 새 버전을 받아 두고 화면 위에 '새 버전이 도착했어요' 단추(#shell-update)만 띄운다.
+// 그 단추를 누르지 않으면 옛 버전으로 계속 놀게 되므로, 단추가 생기면 저장한 뒤 바로 눌러 새 버전으로 다시 연다.
+(function () {
+  function apply(btn) {
+    try { if (window.game && game.sim && game.sim.save) localStorage.setItem('chiikawa-sims-save', game.sim.save()); } catch (e) { /* 저장 실패는 넘어간다 */ }
+    setTimeout(() => { location.href = btn.getAttribute('href') || '__apply'; }, 300);
+  }
+  const look = () => { const b = document.getElementById('shell-update'); if (b) { apply(b); return true; } return false; };
+  const start = () => {
+    if (look()) return;
+    new MutationObserver(() => look()).observe(document.body, { childList: true });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+}());

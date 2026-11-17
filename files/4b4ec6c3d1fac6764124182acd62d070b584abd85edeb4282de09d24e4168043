@@ -1,0 +1,106 @@
+'use strict';
+
+// 치이카와 심즈 — 테스트 모드 (2026-11-10 이재헌 요청)
+// 켜면(오른쪽 위 '테' 단추 또는 F2) 고른 캐릭터를 WASD로 직접 걷게 하고, 메뉴에서 고른 행동은
+// 돈·시간·자격·거리·전용 캐릭터 제한을 모두 무시하고 그 자리로 바로 옮겨 곧장 수행한다. 끄면 원래대로 돌아간다.
+(function (root) {
+  const T = root.TestMode = { on: false, selected: () => null, sim: null };
+  const ctl = c => T.on && c && c.id === T.selected();
+
+  // 제한 풀기: 테스트 중인 캐릭터에게는 막는 이유가 없다
+  const free = (cls, name) => {
+    const P = cls && cls.prototype;
+    if (!P || !P[name]) return;
+    const orig = P[name];
+    P[name] = function (c, ...rest) { return ctl(c) ? null : orig.call(this, c, ...rest); };
+  };
+  free(root.Labor, 'blocked');
+  free(root.Persona, 'blocked');
+  free(root.Ecology, 'blocked');
+  free(root.Traits, 'blocked');
+  if (root.Shop && root.Shop.blocked) { const o = root.Shop.blocked; root.Shop.blocked = (c, x) => (ctl(c) ? null : o(c, x)); }
+
+  const V = root.Village && root.Village.Village && root.Village.Village.prototype;
+  if (V) {
+    // 시간 제한 풀기
+    const open0 = V.open;
+    V.open = function (x) { return T.on && T.pending === x ? true : open0.call(this, x); };
+    // 시키면 값은 돌려주고(공짜), 가던 길 없이 바로 그 자리에
+    const order0 = V.order;
+    V.order = function (c, x, other) {
+      if (ctl(c) && x) {
+        if (x.cost) c.money += x.cost;
+        T.pending = x;
+        c.driven = false;
+      }
+      return order0.call(this, c, x, other);
+    };
+    const walk0 = V.walk;
+    V.walk = function (c, target, dt) {
+      if (ctl(c) && target && c.doing && !c.driven) {
+        c.x = target.x;
+        c.z = target.z;
+        return true;
+      }
+      return walk0.call(this, c, target, dt);
+    };
+  }
+
+  // WASD: 카메라 대신 캐릭터가 걷는다 (막힌 칸은 못 지나간다). 걷기 시작하면 하던 일을 멈춘다
+  T.drive = (dt, keys, view) => {
+    if (!T.on || !T.sim) return false;
+    const c = T.sim.chars.find(q => q.id === T.selected());
+    if (!c) return false;
+    const ix = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+    const iz = (keys.has('KeyS') ? 1 : 0) - (keys.has('KeyW') ? 1 : 0);
+    // 혼자 다른 일을 고르지 않게 (시킨 일이 있으면 막지 않는다)
+    if (c.orders.length) c.idleLeft = 0;
+    else if (!c.doing) c.idleLeft = Math.max(c.idleLeft || 0, 2);
+    if (!ix && !iz) {
+      if (c.driven) { c.walking = false; c.driven = false; }
+      return true;
+    }
+    const s = T.sim;
+    if (c.doing) s.abort(c, '');
+    c.orders.length = 0;
+    const sp = (root.Village.WALK || 4.2) * 1.4 * Math.max(1, s.speed) * dt;
+    const l = Math.hypot(ix, iz);
+    const dx = (Math.cos(view.yaw) * ix + Math.sin(view.yaw) * iz) / l * sp;
+    const dz = (-Math.sin(view.yaw) * ix + Math.cos(view.yaw) * iz) / l * sp;
+    const nav = s.nav;
+    const ok = (x, z) => (nav ? !nav.isBlocked(x, z) : true);
+    if (ok(c.x + dx, c.z + dz)) { c.x += dx; c.z += dz; }
+    else if (ok(c.x + dx, c.z)) c.x += dx;
+    else if (ok(c.x, c.z + dz)) c.z += dz;
+    c.angle = Math.atan2(dx, dz);
+    c.walking = true;
+    c.driven = true;
+    c.h = nav ? nav.surface(c.x, c.z) : 0;
+    return true;
+  };
+
+  // 단추와 표시
+  function ui() {
+    const b = document.createElement('button');
+    b.id = 'testBtn';
+    b.className = 'round';
+    b.type = 'button';
+    b.title = '테스트 모드 (F2): WASD로 조종, 행동은 제한 없이 바로';
+    b.textContent = '테';
+    b.style.cssText = 'position:fixed;z-index:10;left:106px;top:14px';
+    const tag = document.createElement('div');
+    tag.textContent = '테스트 모드 · WASD로 조종 · 행동은 공짜·바로';
+    tag.style.cssText = 'position:fixed;z-index:30;left:50%;top:70px;transform:translateX(-50%);padding:6px 14px;background:#e86a5a;color:#fff;font:700 13px "Malgun Gothic",sans-serif;border-radius:999px;display:none;pointer-events:none';
+    const set = v => {
+      T.on = v;
+      b.style.background = v ? '#e86a5a' : '';
+      b.style.color = v ? '#fff' : '';
+      tag.style.display = v ? 'block' : 'none';
+      if (!v && T.sim) for (const c of T.sim.chars) { c.driven = false; }
+    };
+    b.addEventListener('click', () => set(!T.on));
+    window.addEventListener('keydown', e => { if (e.code === 'F2') { e.preventDefault(); set(!T.on); } });
+    document.body.append(b, tag);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ui); else ui();
+}(typeof self !== 'undefined' ? self : this));
